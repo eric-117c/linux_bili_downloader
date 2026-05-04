@@ -293,30 +293,67 @@ class DownloadCenter(QDialog):
         layout.addWidget(hdr)
 
         self.list_widget = QListWidget()
-        self.list_widget.setSpacing(2)
+        self.list_widget.setSpacing(4)
         layout.addWidget(self.list_widget)
 
+    def _make_row(self, title):
+        w = QWidget()
+        vbox = QVBoxLayout(w)
+        vbox.setContentsMargins(10, 8, 10, 8)
+        vbox.setSpacing(4)
+
+        top = QHBoxLayout()
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet("font-weight: 600;")
+        top.addWidget(title_lbl)
+        top.addStretch()
+        status_lbl = QLabel("0%")
+        status_lbl.setObjectName("section")
+        top.addWidget(status_lbl)
+        vbox.addLayout(top)
+
+        bar = QProgressBar()
+        bar.setValue(0)
+        bar.setTextVisible(False)
+        bar.setFixedHeight(5)
+        vbox.addWidget(bar)
+
+        w._title_lbl = title_lbl
+        w._status_lbl = status_lbl
+        w._bar = bar
+        return w
+
     def add_download(self, key, title):
-        item = QListWidgetItem(f"⏳  {title}  —  0%")
+        item = QListWidgetItem()
+        row = self._make_row(title)
+        item.setSizeHint(row.sizeHint())
         self.list_widget.addItem(item)
-        self._items[key] = item
+        self.list_widget.setItemWidget(item, row)
+        self._items[key] = (item, row)
 
     def update_progress(self, key, pct, speed):
-        if key in self._items:
-            title = self._items[key].text().split("  —  ")[0].lstrip("⏳✓✗ ")
-            self._items[key].setText(f"⏳  {title}  —  {pct}%  {speed}")
+        if key not in self._items:
+            return
+        _, row = self._items[key]
+        row._bar.setValue(pct)
+        row._status_lbl.setText(f"{pct}%  {speed}" if speed else f"{pct}%")
 
     def mark_done(self, key):
-        if key in self._items:
-            text = self._items[key].text()
-            title = text.split("  —  ")[0].lstrip("⏳✓✗ ")
-            self._items[key].setText(f"✓  {title}  —  完成")
-            self._items[key].setForeground(QColor(BILI_PINK))
+        if key not in self._items:
+            return
+        _, row = self._items[key]
+        row._bar.setValue(100)
+        row._bar.setStyleSheet(f"QProgressBar::chunk {{ background: {BILI_PINK}; border-radius: 2px; }}")
+        row._status_lbl.setText("完成")
+        row._status_lbl.setStyleSheet(f"color: {BILI_PINK}; font-weight: 600;")
 
     def mark_error(self, key, msg):
-        if key in self._items:
-            title = self._items[key].text().split("  —  ")[0].lstrip("⏳✓✗ ")
-            self._items[key].setText(f"✗  {title}  —  {msg}")
+        if key not in self._items:
+            return
+        _, row = self._items[key]
+        row._bar.setStyleSheet("QProgressBar::chunk { background: #ef4444; border-radius: 2px; }")
+        row._status_lbl.setText(msg)
+        row._status_lbl.setStyleSheet("color: #ef4444;")
 
 
 class MainWindow(QMainWindow):
