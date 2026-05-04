@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bilibili 下载器</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #333; }
+  .container { max-width: 800px; margin: 40px auto; padding: 0 16px; }
+  h1 { color: #fb7299; margin-bottom: 24px; font-size: 1.6rem; }
+  .card { background: #fff; border-radius: 10px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .row { display: flex; gap: 8px; }
+  input[type=text] { flex: 1; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+  input[type=text]:focus { outline: none; border-color: #fb7299; }
+  button { padding: 10px 20px; background: #fb7299; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; white-space: nowrap; }
+  button:hover { background: #e05a80; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  .info-box { display: flex; gap: 16px; align-items: flex-start; }
+  .info-box img { width: 160px; border-radius: 6px; flex-shrink: 0; }
+  .info-text h2 { font-size: 1rem; margin-bottom: 12px; }
+  select { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+  .episodes { max-height: 240px; overflow-y: auto; border: 1px solid #eee; border-radius: 6px; }
+  .ep-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+  .ep-item:last-child { border-bottom: none; }
+  .ep-item:hover { background: #fef0f4; }
+  .ep-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+  .ep-actions button { background: #eee; color: #555; padding: 4px 12px; font-size: 12px; }
+  .ep-actions button:hover { background: #ddd; }
+  label { font-size: 13px; color: #555; display: block; margin-bottom: 6px; }
+  .progress-bar { height: 6px; background: #eee; border-radius: 4px; overflow: hidden; margin: 8px 0 4px; }
+  .progress-fill { height: 100%; background: #fb7299; transition: width .3s; }
+  .dl-item { padding: 12px 0; border-bottom: 1px solid #f0f0f0; }
+  .dl-item:last-child { border-bottom: none; }
+  .dl-title { font-size: 13px; font-weight: 500; margin-bottom: 2px; }
+  .dl-meta { font-size: 12px; color: #999; }
+  .dl-done { color: #4caf50; }
+  .dl-error { color: #f44336; }
+  #info-section, #download-section, #dl-center { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Bilibili 视频下载器</h1>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:8px">
+      <input type="text" id="url-input" placeholder="输入 Bilibili 视频或合集链接..." />
+    </div>
+    <div class="row">
+      <select id="browser-select" style="flex:0 0 auto">
+        <option value="">不使用Cookie</option>
+        <option value="chrome">Chrome</option>
+        <option value="firefox">Firefox</option>
+        <option value="chromium">Chromium</option>
+        <option value="edge">Edge</option>
+      </select>
+      <button id="fetch-btn" onclick="fetchInfo()">获取信息</button>
+    </div>
+  </div>
+
+  <div class="card" id="info-section">
+    <div class="info-box">
+      <img id="thumbnail" src="" alt="封面" onerror="this.style.display='none'" />
+      <div class="info-text" style="flex:1">
+        <h2 id="video-title"></h2>
+        <label>分辨率</label>
+        <select id="format-select"></select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="episodes-section" style="display:none">
+    <div class="ep-actions">
+      <button onclick="selectAll(true)">全选</button>
+      <button onclick="selectAll(false)">取消全选</button>
+    </div>
+    <div class="episodes" id="episode-list"></div>
+  </div>
+
+  <div class="card" id="download-section">
+    <label>保存路径</label>
+    <div class="row" style="margin-bottom:12px">
+      <input type="text" id="output-dir" placeholder="/home/user/Downloads" />
+    </div>
+    <button id="dl-btn" onclick="startDownload()">开始下载</button>
+  </div>
+
+  <div class="card" id="dl-center">
+    <h2 style="font-size:1rem;margin-bottom:12px">下载中心</h2>
+    <div id="dl-list"></div>
+  </div>
+</div>
+
+<script>
+let videoData = null;
+
+async function fetchInfo() {
+  const url = document.getElementById('url-input').value.trim();
+  if (!url) return;
+  const btn = document.getElementById('fetch-btn');
+  btn.disabled = true;
+  btn.textContent = '获取中...';
+  try {
+    const browser = document.getElementById('browser-select').value || null;
+    const res = await fetch('/api/info', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url, browser})
+    });
+    const data = await res.json();
+    if (data.error) { alert('错误: ' + data.error); return; }
+    videoData = data;
+    renderInfo(data);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '获取信息';
+  }
+}
+
+function renderInfo(data) {
+  document.getElementById('video-title').textContent = data.title;
+  document.getElementById('thumbnail').src = data.thumbnail;
+  const sel = document.getElementById('format-select');
+  sel.innerHTML = data.formats.map(f => `<option value="${f.height}">${f.label}</option>`).join('');
+  if (data.entries.length > 0) {
+    const list = document.getElementById('episode-list');
+    list.innerHTML = data.entries.map(e =>
+      `<div class="ep-item"><input type="checkbox" class="ep-cb" value="${e.index}" checked /><span>${e.title}</span></div>`
+    ).join('');
+    document.getElementById('episodes-section').style.display = 'block';
+  } else {
+    document.getElementById('episodes-section').style.display = 'none';
+  }
+  document.getElementById('info-section').style.display = 'block';
+  document.getElementById('download-section').style.display = 'block';
+}
+
+function selectAll(checked) {
+  document.querySelectorAll('.ep-cb').forEach(cb => cb.checked = checked);
+}
+
+async function startDownload() {
+  const url = document.getElementById('url-input').value.trim();
+  const height = parseInt(document.getElementById('format-select').value);
+  const output_dir = document.getElementById('output-dir').value.trim() || '/home/wjy/Downloads/bilibili';
+  const browser = document.getElementById('browser-select').value || null;
+
+  let entries = null;
+  const cbs = document.querySelectorAll('.ep-cb');
+  if (cbs.length > 0) {
+    entries = [...cbs].filter(cb => cb.checked).map(cb => parseInt(cb.value));
+    if (entries.length === 0) { alert('请至少选择一集'); return; }
+  }
+
+  document.getElementById('dl-btn').disabled = true;
+  const title = document.getElementById('video-title').textContent;
+  const res = await fetch('/api/download', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({url, height, output_dir, entries, browser})
+  });
+  const {task_id} = await res.json();
+  document.getElementById('dl-btn').disabled = false;
+  addDlItem(task_id, title, output_dir);
+  pollProgress(task_id);
+}
+
+function addDlItem(task_id, title, output_dir) {
+  document.getElementById('dl-center').style.display = 'block';
+  const div = document.createElement('div');
+  div.className = 'dl-item';
+  div.id = 'task-' + task_id;
+  div.innerHTML = `
+    <div class="dl-title">${title}</div>
+    <div class="progress-bar"><div class="progress-fill" id="fill-${task_id}" style="width:0%"></div></div>
+    <div class="dl-meta" id="meta-${task_id}">准备中...</div>`;
+  document.getElementById('dl-list').prepend(div);
+}
+
+function pollProgress(task_id) {
+  const es = new EventSource(`/api/progress/${task_id}`);
+  es.onmessage = e => {
+    const d = JSON.parse(e.data);
+    const fill = document.getElementById('fill-' + task_id);
+    const meta = document.getElementById('meta-' + task_id);
+    if (d.status === 'done') {
+      fill.style.width = '100%';
+      fill.style.background = '#4caf50';
+      meta.className = 'dl-meta dl-done';
+      meta.textContent = `下载完成 · 已保存至: ${d.output_dir}`;
+      es.close();
+    } else if (d.status === 'error') {
+      meta.className = 'dl-meta dl-error';
+      meta.textContent = '错误: ' + d.message;
+      es.close();
+    } else {
+      fill.style.width = d.progress + '%';
+      meta.textContent = d.progress + '%' + (d.message ? '  ' + d.message : '');
+    }
+  };
+}
+</script>
+</body>
+</html>
