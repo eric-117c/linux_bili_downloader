@@ -4,14 +4,93 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
                              QComboBox, QListWidget, QListWidgetItem, QProgressBar,
-                             QFileDialog, QTextEdit, QSplitter, QGroupBox, QCheckBox,
-                             QDialog, QDialogButtonBox, QFormLayout, QMenuBar, QMenu)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QPixmap, QIcon, QAction
+                             QFileDialog, QSplitter, QCheckBox,
+                             QDialog, QDialogButtonBox, QFrame, QScrollArea)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import QPixmap, QIcon, QAction, QColor, QPainter, QBrush
 import yt_dlp
 from urllib.request import urlopen
 from settings import Settings
 from settings_dialog import SettingsDialog
+
+
+BILI_PINK = "#FB7299"
+
+DARK_QSS = f"""
+QWidget {{ background: #18181b; color: #fafafa; font-family: 'Segoe UI', sans-serif; font-size: 13px; }}
+QFrame#card {{ background: #27272a; border-radius: 8px; }}
+QLineEdit, QComboBox {{
+    background: #3f3f46; border: 1px solid #52525b; border-radius: 6px;
+    padding: 6px 10px; color: #fafafa;
+}}
+QLineEdit:focus, QComboBox:focus {{ border-color: {BILI_PINK}; }}
+QComboBox::drop-down {{ border: none; width: 24px; }}
+QPushButton {{
+    background: {BILI_PINK}; color: white; border: none; border-radius: 6px;
+    padding: 7px 16px; font-weight: 600;
+}}
+QPushButton:hover {{ background: #fc8fad; }}
+QPushButton:disabled {{ background: #52525b; color: #a1a1aa; }}
+QPushButton#ghost {{
+    background: transparent; color: #a1a1aa; border: 1px solid #3f3f46;
+}}
+QPushButton#ghost:hover {{ border-color: {BILI_PINK}; color: {BILI_PINK}; }}
+QPushButton#close {{ background: transparent; color: #a1a1aa; border: none; font-size: 16px; padding: 4px 10px; }}
+QPushButton#close:hover {{ background: #ef4444; color: white; border-radius: 4px; }}
+QPushButton#theme {{ background: transparent; color: #a1a1aa; border: none; font-size: 14px; padding: 4px 8px; }}
+QPushButton#theme:hover {{ color: {BILI_PINK}; }}
+QProgressBar {{
+    background: #3f3f46; border-radius: 4px; height: 6px; text-align: center;
+}}
+QProgressBar::chunk {{ background: {BILI_PINK}; border-radius: 4px; }}
+QListWidget {{
+    background: #27272a; border: 1px solid #3f3f46; border-radius: 6px;
+}}
+QListWidget::item {{ padding: 6px 10px; border-radius: 4px; }}
+QListWidget::item:selected {{ background: #3f3f46; color: {BILI_PINK}; }}
+QScrollBar:vertical {{ background: #27272a; width: 6px; border-radius: 3px; }}
+QScrollBar::handle:vertical {{ background: #52525b; border-radius: 3px; }}
+QLabel#title_bar_label {{ color: {BILI_PINK}; font-weight: 700; font-size: 14px; letter-spacing: 1px; }}
+QLabel#section {{ color: #a1a1aa; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }}
+"""
+
+LIGHT_QSS = f"""
+QWidget {{ background: #f4f4f5; color: #18181b; font-family: 'Segoe UI', sans-serif; font-size: 13px; }}
+QFrame#card {{ background: #ffffff; border-radius: 8px; }}
+QLineEdit, QComboBox {{
+    background: #ffffff; border: 1px solid #d4d4d8; border-radius: 6px;
+    padding: 6px 10px; color: #18181b;
+}}
+QLineEdit:focus, QComboBox:focus {{ border-color: {BILI_PINK}; }}
+QComboBox::drop-down {{ border: none; width: 24px; }}
+QPushButton {{
+    background: {BILI_PINK}; color: white; border: none; border-radius: 6px;
+    padding: 7px 16px; font-weight: 600;
+}}
+QPushButton:hover {{ background: #fc8fad; }}
+QPushButton:disabled {{ background: #d4d4d8; color: #a1a1aa; }}
+QPushButton#ghost {{
+    background: transparent; color: #71717a; border: 1px solid #d4d4d8;
+}}
+QPushButton#ghost:hover {{ border-color: {BILI_PINK}; color: {BILI_PINK}; }}
+QPushButton#close {{ background: transparent; color: #71717a; border: none; font-size: 16px; padding: 4px 10px; }}
+QPushButton#close:hover {{ background: #ef4444; color: white; border-radius: 4px; }}
+QPushButton#theme {{ background: transparent; color: #71717a; border: none; font-size: 14px; padding: 4px 8px; }}
+QPushButton#theme:hover {{ color: {BILI_PINK}; }}
+QProgressBar {{
+    background: #e4e4e7; border-radius: 4px; height: 6px; text-align: center;
+}}
+QProgressBar::chunk {{ background: {BILI_PINK}; border-radius: 4px; }}
+QListWidget {{
+    background: #ffffff; border: 1px solid #e4e4e7; border-radius: 6px;
+}}
+QListWidget::item {{ padding: 6px 10px; border-radius: 4px; }}
+QListWidget::item:selected {{ background: #fce7ef; color: {BILI_PINK}; }}
+QScrollBar:vertical {{ background: #f4f4f5; width: 6px; border-radius: 3px; }}
+QScrollBar::handle:vertical {{ background: #d4d4d8; border-radius: 3px; }}
+QLabel#title_bar_label {{ color: {BILI_PINK}; font-weight: 700; font-size: 14px; letter-spacing: 1px; }}
+QLabel#section {{ color: #71717a; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }}
+"""
 
 
 class VideoInfoWorker(QThread):
@@ -78,8 +157,7 @@ class DownloadWorker(QThread):
                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                 done = d.get("downloaded_bytes", 0)
                 pct = int(done / total * 100) if total else 0
-                speed = d.get("_speed_str", "")
-                self.progress.emit(pct, speed)
+                self.progress.emit(pct, d.get("_speed_str", ""))
             elif d["status"] == "finished":
                 self.progress.emit(99, "合并中...")
 
@@ -94,7 +172,7 @@ class DownloadWorker(QThread):
         if self.browser:
             opts["cookiesfrombrowser"] = (self.browser,)
         if self.speed_limit:
-            opts["ratelimit"] = self.parse_speed_limit(self.speed_limit)
+            opts["ratelimit"] = self._parse_speed(self.speed_limit)
         if self.entries is not None:
             opts["playlist_items"] = ",".join(str(i + 1) for i in self.entries)
 
@@ -105,285 +183,489 @@ class DownloadWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
-    def parse_speed_limit(self, limit_str):
-        """解析速度限制字符串，如 '5M' -> 5242880 bytes/s"""
-        limit_str = limit_str.strip().upper()
-        if not limit_str:
-            return None
-
-        multipliers = {'K': 1024, 'M': 1024*1024, 'G': 1024*1024*1024}
-
-        if limit_str[-1] in multipliers:
+    def _parse_speed(self, s):
+        s = s.strip().upper()
+        m = {"K": 1024, "M": 1024**2, "G": 1024**3}
+        if s and s[-1] in m:
             try:
-                return int(float(limit_str[:-1]) * multipliers[limit_str[-1]])
-            except:
+                return int(float(s[:-1]) * m[s[-1]])
+            except Exception:
                 return None
         try:
-            return int(limit_str)
-        except:
+            return int(s)
+        except Exception:
             return None
 
 
-class BilibiliDownloader(QMainWindow):
+def _card(layout=None):
+    f = QFrame()
+    f.setObjectName("card")
+    if layout:
+        f.setLayout(layout)
+    return f
+
+
+class TitleBar(QWidget):
+    def __init__(self, parent, on_theme_toggle, on_close):
+        super().__init__(parent)
+        self.setFixedHeight(44)
+        self._drag_pos = None
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(16, 0, 8, 0)
+
+        lbl = QLabel("BILI-DOWNLOADER")
+        lbl.setObjectName("title_bar_label")
+        row.addWidget(lbl)
+        row.addStretch()
+
+        self.theme_btn = QPushButton("☀")
+        self.theme_btn.setObjectName("theme")
+        self.theme_btn.setFixedSize(32, 32)
+        self.theme_btn.clicked.connect(on_theme_toggle)
+        row.addWidget(self.theme_btn)
+
+        close_btn = QPushButton("✕")
+        close_btn.setObjectName("close")
+        close_btn.setFixedSize(36, 32)
+        close_btn.clicked.connect(on_close)
+        row.addWidget(close_btn)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = e.globalPosition().toPoint() - self.window().frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, e):
+        if self._drag_pos and e.buttons() == Qt.MouseButton.LeftButton:
+            self.window().move(e.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, e):
+        self._drag_pos = None
+
+
+class CompletionToast(QWidget):
+    def __init__(self, parent, message):
+        super().__init__(parent, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 10, 16, 10)
+
+        lbl = QLabel(f"✓  {message}")
+        lbl.setStyleSheet(f"color: white; font-weight: 600; background: {BILI_PINK}; border-radius: 8px; padding: 8px 14px;")
+        layout.addWidget(lbl)
+
+        self.adjustSize()
+        pr = parent.rect()
+        self.move(pr.right() - self.width() - 20, pr.bottom() - self.height() - 20)
+        self.show()
+
+        QTimer.singleShot(3000, self.close)
+
+
+class DownloadCenter(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("下载中心")
+        self.setMinimumSize(480, 360)
+        self._items = {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        hdr = QLabel("下载中心")
+        hdr.setStyleSheet("font-size: 16px; font-weight: bold;")
+        layout.addWidget(hdr)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setSpacing(2)
+        layout.addWidget(self.list_widget)
+
+    def add_download(self, key, title):
+        item = QListWidgetItem(f"⏳  {title}  —  0%")
+        self.list_widget.addItem(item)
+        self._items[key] = item
+
+    def update_progress(self, key, pct, speed):
+        if key in self._items:
+            title = self._items[key].text().split("  —  ")[0].lstrip("⏳✓✗ ")
+            self._items[key].setText(f"⏳  {title}  —  {pct}%  {speed}")
+
+    def mark_done(self, key):
+        if key in self._items:
+            text = self._items[key].text()
+            title = text.split("  —  ")[0].lstrip("⏳✓✗ ")
+            self._items[key].setText(f"✓  {title}  —  完成")
+            self._items[key].setForeground(QColor(BILI_PINK))
+
+    def mark_error(self, key, msg):
+        if key in self._items:
+            title = self._items[key].text().split("  —  ")[0].lstrip("⏳✓✗ ")
+            self._items[key].setText(f"✗  {title}  —  {msg}")
+
+
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.video_data = None
         self.settings = Settings()
-        self.init_ui()
-        self.load_settings()
+        self.theme = self.settings.get("theme", "dark")
+        self._info = None
+        self._worker = None
+        self._dl_worker = None
+        self._dl_key = 0
 
-    def init_ui(self):
-        self.setWindowTitle("Bilibili 下载器")
-        self.setGeometry(100, 100, 900, 700)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMinimumSize(860, 680)
 
-        # 菜单栏
-        menubar = self.menuBar()
-        settings_menu = menubar.addMenu("设置")
+        self.download_center = DownloadCenter(self)
 
-        settings_action = QAction("偏好设置", self)
-        settings_action.triggered.connect(self.open_settings)
-        settings_menu.addAction(settings_action)
+        root = QWidget()
+        root.setObjectName("root")
+        self.setCentralWidget(root)
+        root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        central = QWidget()
-        self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
+        self.title_bar = TitleBar(self, self._toggle_theme, self.close)
+        root_layout.addWidget(self.title_bar)
 
-        # URL 输入区
-        url_group = QGroupBox("视频链接")
-        url_layout = QVBoxLayout()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        root_layout.addWidget(scroll)
 
-        url_row = QHBoxLayout()
+        body = QWidget()
+        scroll.setWidget(body)
+        self.body_layout = QVBoxLayout(body)
+        self.body_layout.setContentsMargins(20, 16, 20, 16)
+        self.body_layout.setSpacing(12)
+
+        self._build_url_card()
+        self._build_info_card()
+        self._build_episodes_card()
+        self._build_download_card()
+        self._build_progress_card()
+        self.body_layout.addStretch()
+        self._build_bottom_bar(root_layout)
+
+        self._apply_theme()
+        self._load_settings_to_ui()
+
+    def _build_url_card(self):
+        inner = QVBoxLayout()
+        inner.setContentsMargins(16, 14, 16, 14)
+        inner.setSpacing(10)
+
+        sec = QLabel("视频链接")
+        sec.setObjectName("section")
+        inner.addWidget(sec)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("输入 Bilibili 视频或合集链接...")
-        url_row.addWidget(self.url_input)
+        self.url_input.setPlaceholderText("粘贴 Bilibili 视频或合集链接...")
+        row.addWidget(self.url_input)
 
         self.browser_combo = QComboBox()
         self.browser_combo.addItems(["不使用Cookie", "chrome", "firefox", "chromium", "edge"])
-        url_row.addWidget(self.browser_combo)
+        self.browser_combo.setFixedWidth(130)
+        row.addWidget(self.browser_combo)
 
         self.fetch_btn = QPushButton("获取信息")
-        self.fetch_btn.clicked.connect(self.fetch_info)
-        url_row.addWidget(self.fetch_btn)
+        self.fetch_btn.setFixedWidth(90)
+        self.fetch_btn.clicked.connect(self._fetch_info)
+        row.addWidget(self.fetch_btn)
 
-        url_layout.addLayout(url_row)
-        url_group.setLayout(url_layout)
-        layout.addWidget(url_group)
+        inner.addLayout(row)
+        self.body_layout.addWidget(_card(inner))
 
-        # 视频信息区
-        info_group = QGroupBox("视频信息")
-        info_layout = QHBoxLayout()
+    def _build_info_card(self):
+        inner = QVBoxLayout()
+        inner.setContentsMargins(16, 14, 16, 14)
+        inner.setSpacing(10)
 
-        self.thumbnail_label = QLabel()
-        self.thumbnail_label.setFixedSize(160, 120)
-        self.thumbnail_label.setScaledContents(True)
-        info_layout.addWidget(self.thumbnail_label)
+        sec = QLabel("视频信息")
+        sec.setObjectName("section")
+        inner.addWidget(sec)
 
-        info_right = QVBoxLayout()
-        self.title_label = QLabel("等待获取...")
+        row = QHBoxLayout()
+        row.setSpacing(14)
+
+        self.thumb_label = QLabel()
+        self.thumb_label.setFixedSize(160, 100)
+        self.thumb_label.setStyleSheet("background: #3f3f46; border-radius: 6px;")
+        self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row.addWidget(self.thumb_label)
+
+        meta = QVBoxLayout()
+        meta.setSpacing(8)
+        self.title_label = QLabel("—")
         self.title_label.setWordWrap(True)
-        info_right.addWidget(self.title_label)
+        self.title_label.setStyleSheet("font-size: 14px; font-weight: 600;")
+        meta.addWidget(self.title_label)
 
         res_row = QHBoxLayout()
-        res_row.addWidget(QLabel("分辨率:"))
-        self.resolution_combo = QComboBox()
-        res_row.addWidget(self.resolution_combo)
+        res_lbl = QLabel("分辨率:")
+        res_lbl.setObjectName("section")
+        res_row.addWidget(res_lbl)
+        self.res_combo = QComboBox()
+        self.res_combo.setFixedWidth(110)
+        res_row.addWidget(self.res_combo)
         res_row.addStretch()
-        info_right.addLayout(res_row)
+        meta.addLayout(res_row)
+        meta.addStretch()
+        row.addLayout(meta)
 
-        info_layout.addLayout(info_right)
-        info_group.setLayout(info_layout)
-        layout.addWidget(info_group)
+        inner.addLayout(row)
+        self.body_layout.addWidget(_card(inner))
 
-        # 剧集列表
-        self.episodes_group = QGroupBox("剧集列表")
-        episodes_layout = QVBoxLayout()
+    def _build_episodes_card(self):
+        inner = QVBoxLayout()
+        inner.setContentsMargins(16, 14, 16, 14)
+        inner.setSpacing(10)
 
-        ep_btns = QHBoxLayout()
-        select_all_btn = QPushButton("全选")
-        select_all_btn.clicked.connect(lambda: self.select_all_episodes(True))
-        ep_btns.addWidget(select_all_btn)
+        sec = QLabel("剧集列表")
+        sec.setObjectName("section")
+        inner.addWidget(sec)
 
-        deselect_all_btn = QPushButton("取消全选")
-        deselect_all_btn.clicked.connect(lambda: self.select_all_episodes(False))
-        ep_btns.addWidget(deselect_all_btn)
-        ep_btns.addStretch()
-        episodes_layout.addLayout(ep_btns)
+        self.episode_list = QListWidget()
+        self.episode_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self.episode_list.setMaximumHeight(160)
+        inner.addWidget(self.episode_list)
 
-        self.episodes_list = QListWidget()
-        episodes_layout.addWidget(self.episodes_list)
+        btn_row = QHBoxLayout()
+        sel_all = QPushButton("全选")
+        sel_all.setObjectName("ghost")
+        sel_all.clicked.connect(self.episode_list.selectAll)
+        desel_all = QPushButton("取消全选")
+        desel_all.setObjectName("ghost")
+        desel_all.clicked.connect(self.episode_list.clearSelection)
+        btn_row.addWidget(sel_all)
+        btn_row.addWidget(desel_all)
+        btn_row.addStretch()
+        inner.addLayout(btn_row)
 
-        self.episodes_group.setLayout(episodes_layout)
-        self.episodes_group.hide()
-        layout.addWidget(self.episodes_group)
+        self.episodes_card = _card(inner)
+        self.episodes_card.setVisible(False)
+        self.body_layout.addWidget(self.episodes_card)
 
-        # 下载设置
-        dl_group = QGroupBox("下载设置")
-        dl_layout = QVBoxLayout()
+    def _build_download_card(self):
+        inner = QVBoxLayout()
+        inner.setContentsMargins(16, 14, 16, 14)
+        inner.setSpacing(10)
 
-        path_row = QHBoxLayout()
-        path_row.addWidget(QLabel("保存路径:"))
-        self.output_path = QLineEdit(str(Path.home() / "Downloads" / "bilibili"))
-        path_row.addWidget(self.output_path)
+        sec = QLabel("保存位置")
+        sec.setObjectName("section")
+        inner.addWidget(sec)
 
-        browse_btn = QPushButton("浏览...")
-        browse_btn.clicked.connect(self.browse_folder)
-        path_row.addWidget(browse_btn)
-        dl_layout.addLayout(path_row)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.path_input = QLineEdit()
+        row.addWidget(self.path_input)
+        browse_btn = QPushButton("浏览")
+        browse_btn.setObjectName("ghost")
+        browse_btn.setFixedWidth(60)
+        browse_btn.clicked.connect(self._browse_path)
+        row.addWidget(browse_btn)
+        self.dl_btn = QPushButton("开始下载")
+        self.dl_btn.setFixedWidth(100)
+        self.dl_btn.setEnabled(False)
+        self.dl_btn.clicked.connect(self._start_download)
+        row.addWidget(self.dl_btn)
+        inner.addLayout(row)
 
-        self.download_btn = QPushButton("开始下载")
-        self.download_btn.clicked.connect(self.start_download)
-        dl_layout.addWidget(self.download_btn)
+        self.body_layout.addWidget(_card(inner))
 
-        dl_group.setLayout(dl_layout)
-        layout.addWidget(dl_group)
+    def _build_progress_card(self):
+        inner = QVBoxLayout()
+        inner.setContentsMargins(16, 14, 16, 14)
+        inner.setSpacing(8)
 
-        # 下载进度
-        progress_group = QGroupBox("下载进度")
-        progress_layout = QVBoxLayout()
+        sec = QLabel("下载进度")
+        sec.setObjectName("section")
+        inner.addWidget(sec)
 
         self.progress_bar = QProgressBar()
-        progress_layout.addWidget(self.progress_bar)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        inner.addWidget(self.progress_bar)
 
-        self.status_label = QLabel("等待下载...")
-        progress_layout.addWidget(self.status_label)
+        self.status_label = QLabel("就绪")
+        inner.addWidget(self.status_label)
 
-        progress_group.setLayout(progress_layout)
-        layout.addWidget(progress_group)
+        self.body_layout.addWidget(_card(inner))
 
-    def fetch_info(self):
+    def _build_bottom_bar(self, root_layout):
+        bar = QWidget()
+        bar.setFixedHeight(44)
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(20, 0, 20, 0)
+
+        settings_btn = QPushButton("偏好设置")
+        settings_btn.setObjectName("ghost")
+        settings_btn.clicked.connect(self._open_settings)
+        row.addWidget(settings_btn)
+        row.addStretch()
+
+        dc_btn = QPushButton("下载中心")
+        dc_btn.setObjectName("ghost")
+        dc_btn.clicked.connect(self.download_center.show)
+        row.addWidget(dc_btn)
+
+        root_layout.addWidget(bar)
+
+    def _apply_theme(self):
+        qss = DARK_QSS if self.theme == "dark" else LIGHT_QSS
+        self.setStyleSheet(qss)
+        self.download_center.setStyleSheet(qss)
+        self.title_bar.theme_btn.setText("☀" if self.theme == "dark" else "🌙")
+
+    def _toggle_theme(self):
+        self.theme = "light" if self.theme == "dark" else "dark"
+        self.settings.set("theme", self.theme)
+        self._apply_theme()
+
+    def _load_settings_to_ui(self):
+        self.path_input.setText(self.settings.get("download_path", ""))
+        browser = self.settings.get("browser", "不使用Cookie")
+        idx = self.browser_combo.findText(browser)
+        if idx >= 0:
+            self.browser_combo.setCurrentIndex(idx)
+
+    def _open_settings(self):
+        dlg = SettingsDialog(self.settings, self)
+        if dlg.exec():
+            self._load_settings_to_ui()
+            self.theme = self.settings.get("theme", self.theme)
+            self._apply_theme()
+
+    def _browse_path(self):
+        folder = QFileDialog.getExistingDirectory(self, "选择下载文件夹")
+        if folder:
+            self.path_input.setText(folder)
+
+    def _fetch_info(self):
         url = self.url_input.text().strip()
         if not url:
             return
-
         self.fetch_btn.setEnabled(False)
         self.fetch_btn.setText("获取中...")
+        self.dl_btn.setEnabled(False)
+        self.status_label.setText("正在获取视频信息...")
 
         browser = self.browser_combo.currentText()
         if browser == "不使用Cookie":
             browser = None
 
-        self.worker = VideoInfoWorker(url, browser)
-        self.worker.finished.connect(self.on_info_received)
-        self.worker.error.connect(self.on_info_error)
-        self.worker.start()
+        self._worker = VideoInfoWorker(url, browser)
+        self._worker.finished.connect(self._on_info)
+        self._worker.error.connect(self._on_info_error)
+        self._worker.start()
 
-    def on_info_received(self, data):
-        self.video_data = data
-        self.title_label.setText(data["title"])
+    def _on_info(self, data):
+        self._info = data
+        self.fetch_btn.setEnabled(True)
+        self.fetch_btn.setText("获取信息")
+        self.title_label.setText(data.get("title", ""))
+        self.status_label.setText("就绪")
 
-        if data["thumbnail"]:
+        self.res_combo.clear()
+        for fmt in data.get("formats", []):
+            self.res_combo.addItem(fmt["label"], fmt["height"])
+        default_res = self.settings.get("default_resolution", "1080")
+        for i in range(self.res_combo.count()):
+            if str(self.res_combo.itemData(i)) == default_res:
+                self.res_combo.setCurrentIndex(i)
+                break
+
+        entries = data.get("entries", [])
+        self.episode_list.clear()
+        if entries:
+            for e in entries:
+                item = QListWidgetItem(e["title"])
+                item.setData(Qt.ItemDataRole.UserRole, e["index"])
+                self.episode_list.addItem(item)
+            self.episode_list.selectAll()
+            self.episodes_card.setVisible(True)
+        else:
+            self.episodes_card.setVisible(False)
+
+        thumb_url = data.get("thumbnail", "")
+        if thumb_url:
             try:
-                img_data = urlopen(data["thumbnail"]).read()
-                pixmap = QPixmap()
-                pixmap.loadFromData(img_data)
-                self.thumbnail_label.setPixmap(pixmap)
-            except:
+                raw = urlopen(thumb_url, timeout=5).read()
+                pix = QPixmap()
+                pix.loadFromData(raw)
+                self.thumb_label.setPixmap(pix.scaled(160, 100, Qt.AspectRatioMode.KeepAspectRatio,
+                                                       Qt.TransformationMode.SmoothTransformation))
+            except Exception:
                 pass
 
-        self.resolution_combo.clear()
-        default_res = self.settings.get("default_resolution")
-        default_idx = 0
-        for idx, fmt in enumerate(data["formats"]):
-            self.resolution_combo.addItem(fmt["label"], fmt["height"])
-            if str(fmt["height"]) == default_res:
-                default_idx = idx
-        self.resolution_combo.setCurrentIndex(default_idx)
-
-        if data["entries"]:
-            self.episodes_list.clear()
-            for ep in data["entries"]:
-                item = QListWidgetItem(ep["title"])
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(Qt.CheckState.Checked)
-                item.setData(Qt.ItemDataRole.UserRole, ep["index"])
-                self.episodes_list.addItem(item)
-            self.episodes_group.show()
-        else:
-            self.episodes_group.hide()
-
-        self.fetch_btn.setEnabled(True)
-        self.fetch_btn.setText("获取信息")
-
-        # 自动开始下载
+        self.dl_btn.setEnabled(True)
         if self.settings.get("auto_start_download"):
-            self.start_download()
+            self._start_download()
 
-    def on_info_error(self, error):
-        self.status_label.setText(f"错误: {error}")
+    def _on_info_error(self, msg):
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("获取信息")
+        self.status_label.setText(f"错误: {msg}")
 
-    def select_all_episodes(self, checked):
-        for i in range(self.episodes_list.count()):
-            item = self.episodes_list.item(i)
-            item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
-
-    def browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "选择保存文件夹")
-        if folder:
-            self.output_path.setText(folder)
-
-    def start_download(self):
-        if not self.video_data:
+    def _start_download(self):
+        if not self._info:
             return
-
         url = self.url_input.text().strip()
-        height = self.resolution_combo.currentData()
-        output_dir = self.output_path.text()
-
+        height = self.res_combo.currentData() or 1080
+        output_dir = self.path_input.text().strip() or self.settings.get("download_path")
         browser = self.browser_combo.currentText()
         if browser == "不使用Cookie":
             browser = None
+        speed_limit = self.settings.get("speed_limit", "")
 
         entries = None
-        if self.episodes_group.isVisible():
-            entries = []
-            for i in range(self.episodes_list.count()):
-                item = self.episodes_list.item(i)
-                if item.checkState() == Qt.CheckState.Checked:
-                    entries.append(item.data(Qt.ItemDataRole.UserRole))
-            if not entries:
-                self.status_label.setText("请至少选择一集")
-                return
+        if self._info.get("entries") and self.episodes_card.isVisible():
+            selected = self.episode_list.selectedItems()
+            entries = [item.data(Qt.ItemDataRole.UserRole) for item in selected]
 
-        self.download_btn.setEnabled(False)
+        self._dl_key += 1
+        key = self._dl_key
+        title = self._info.get("title", "未知")
+        self.download_center.add_download(key, title)
+
+        self.dl_btn.setEnabled(False)
         self.progress_bar.setValue(0)
-        self.status_label.setText("准备下载...")
+        self.status_label.setText("下载中...")
 
-        speed_limit = self.settings.get("speed_limit", "")
-        self.dl_worker = DownloadWorker(url, height, output_dir, browser, entries, speed_limit)
-        self.dl_worker.progress.connect(self.on_download_progress)
-        self.dl_worker.finished.connect(self.on_download_finished)
-        self.dl_worker.error.connect(self.on_download_error)
-        self.dl_worker.start()
+        self._dl_worker = DownloadWorker(url, height, output_dir, browser, entries, speed_limit)
+        self._dl_worker.progress.connect(lambda pct, spd: self._on_progress(key, pct, spd))
+        self._dl_worker.finished.connect(lambda _: self._on_done(key, title))
+        self._dl_worker.error.connect(lambda msg: self._on_error(key, msg))
+        self._dl_worker.start()
 
-    def on_download_progress(self, pct, msg):
+    def _on_progress(self, key, pct, speed):
         self.progress_bar.setValue(pct)
-        self.status_label.setText(f"{pct}% {msg}")
+        self.status_label.setText(f"下载中... {pct}%  {speed}")
+        self.download_center.update_progress(key, pct, speed)
 
-    def on_download_finished(self, output_dir):
+    def _on_done(self, key, title):
         self.progress_bar.setValue(100)
-        self.status_label.setText(f"下载完成 · 已保存至: {output_dir}")
-        self.download_btn.setEnabled(True)
+        self.status_label.setText("下载完成")
+        self.dl_btn.setEnabled(True)
+        self.download_center.mark_done(key)
+        CompletionToast(self.centralWidget(), f"下载完成 · {title}")
 
-    def on_download_error(self, error):
-        self.status_label.setText(f"错误: {error}")
-        self.download_btn.setEnabled(True)
-
-    def load_settings(self):
-        """加载用户设置到界面"""
-        self.output_path.setText(self.settings.get("download_path"))
-        self.browser_combo.setCurrentText(self.settings.get("browser"))
-
-    def open_settings(self):
-        """打开设置对话框"""
-        dialog = SettingsDialog(self.settings, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.load_settings()
+    def _on_error(self, key, msg):
+        self.status_label.setText(f"错误: {msg}")
+        self.dl_btn.setEnabled(True)
+        self.download_center.mark_error(key, msg)
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = BilibiliDownloader()
-    window.show()
+    app.setApplicationName("BILI-DOWNLOADER")
+    win = MainWindow()
+    win.resize(900, 700)
+    win.show()
     sys.exit(app.exec())

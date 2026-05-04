@@ -12,6 +12,7 @@ class Settings:
             "speed_limit": "",  # 空表示不限速，格式如 "5M"
             "default_resolution": "1080",
             "auto_start_download": False,
+            "theme": "dark",
         }
         self.data = self.load()
 
