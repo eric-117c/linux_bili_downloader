@@ -7,24 +7,44 @@ DESKTOP_DIR="$HOME/.local/share/applications"
 
 echo ">>> 安装 Bilibili 下载器..."
 
+# 检查源文件
+for f in app.py settings.py settings_dialog.py requirements.txt; do
+    if [ ! -f "$f" ]; then
+        echo "错误: 找不到 $f，请在项目根目录下运行此脚本" >&2
+        exit 1
+    fi
+done
+
+# 检查 ffmpeg
+if ! command -v ffmpeg &>/dev/null; then
+    echo "警告: 未检测到 ffmpeg，视频合并功能将不可用" >&2
+    echo "  Arch: sudo pacman -S ffmpeg" >&2
+    echo "  Ubuntu/Debian: sudo apt install ffmpeg" >&2
+fi
+
 # 复制应用文件
 mkdir -p "$APP_DIR"
-cp -r main.py requirements.txt static "$APP_DIR/"
+cp app.py settings.py settings_dialog.py requirements.txt "$APP_DIR/"
 
 # 创建虚拟环境并安装依赖
-python3 -m venv "$APP_DIR/venv"
-"$APP_DIR/venv/bin/pip" install -q --upgrade pip
-"$APP_DIR/venv/bin/pip" install -q -r "$APP_DIR/requirements.txt"
+if [ ! -f "$APP_DIR/venv/bin/python" ]; then
+    python3 -m venv "$APP_DIR/venv"
+fi
+
+if ! "$APP_DIR/venv/bin/python" -c "import PyQt6, yt_dlp" &>/dev/null; then
+    echo ">>> 安装依赖（PyQt6 较大，请耐心等待）..."
+    "$APP_DIR/venv/bin/pip" install --upgrade pip
+    "$APP_DIR/venv/bin/pip" install -r "$APP_DIR/requirements.txt"
+else
+    echo ">>> 依赖已安装，跳过"
+fi
 
 # 创建启动脚本
 mkdir -p "$BIN_DIR"
 cat > "$BIN_DIR/bilibili-dl" <<EOF
 #!/usr/bin/env bash
 cd "$APP_DIR"
-"$APP_DIR/venv/bin/uvicorn" main:app --host 127.0.0.1 --port 8963 &
-sleep 1.5
-xdg-open http://localhost:8963
-wait
+"$APP_DIR/venv/bin/python" app.py
 EOF
 chmod +x "$BIN_DIR/bilibili-dl"
 
@@ -40,6 +60,8 @@ Terminal=false
 Type=Application
 Categories=Network;Video;
 EOF
+
+update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 
 echo ">>> 安装完成！"
 echo "    命令行启动: bilibili-dl"
