@@ -141,6 +141,7 @@ class DownloadWorker(QThread):
     progress = pyqtSignal(int, str)
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
+    cancelled = pyqtSignal()
 
     def __init__(self, url, height, output_dir, browser, entries=None, speed_limit=""):
         super().__init__()
@@ -150,9 +151,15 @@ class DownloadWorker(QThread):
         self.browser = browser
         self.entries = entries
         self.speed_limit = speed_limit
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
 
     def run(self):
         def progress_hook(d):
+            if self._cancel:
+                raise Exception("__cancelled__")
             if d["status"] == "downloading":
                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                 done = d.get("downloaded_bytes", 0)
@@ -179,9 +186,15 @@ class DownloadWorker(QThread):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([self.url])
-            self.finished.emit(self.output_dir)
+            if self._cancel:
+                self.cancelled.emit()
+            else:
+                self.finished.emit(self.output_dir)
         except Exception as e:
-            self.error.emit(str(e))
+            if "__cancelled__" in str(e) or self._cancel:
+                self.cancelled.emit()
+            else:
+                self.error.emit(str(e))
 
     def _parse_speed(self, s):
         s = s.strip().upper()
@@ -475,6 +488,13 @@ class MainWindow(QMainWindow):
         self.dl_btn.setEnabled(False)
         self.dl_btn.clicked.connect(self._start_download)
         row.addWidget(self.dl_btn)
+
+        self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.setObjectName("ghost")
+        self.cancel_btn.setFixedWidth(60)
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self._cancel_download)
+        row.addWidget(self.cancel_btn)
         inner.addLayout(row)
 
         self.body_layout.addWidget(_card(inner))
@@ -635,12 +655,14 @@ class MainWindow(QMainWindow):
         self.download_center.add_download(key, title)
 
         self.dl_btn.setEnabled(False)
+        self.cancel_btn.setVisible(True)
         self.progress_bar.setValue(0)
         self.status_label.setText("下载中...")
 
         self._dl_worker = DownloadWorker(url, height, output_dir, browser, entries, speed_limit)
         self._dl_worker.progress.connect(lambda pct, spd: self._on_progress(key, pct, spd))
         self._dl_worker.finished.connect(lambda _: self._on_done(key, title))
+        self._dl_worker.cancelled.connect(lambda: self._on_cancelled(key))
         self._dl_worker.error.connect(lambda msg: self._on_error(key, msg))
         self._dl_worker.start()
 
@@ -649,16 +671,34 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"下载中... {pct}%  {speed}")
         self.download_center.update_progress(key, pct, speed)
 
+    def _cancel_download(self):
+        if self._dl_worker and self._dl_worker.isRunning():
+            self._dl_worker.cancel()
+        self.cancel_btn.setEnabled(False)
+        self.status_label.setText("正在取消...")
+
     def _on_done(self, key, title):
         self.progress_bar.setValue(100)
         self.status_label.setText("下载完成")
         self.dl_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.setEnabled(True)
         self.download_center.mark_done(key)
         CompletionToast(self.centralWidget(), f"下载完成 · {title}")
+
+    def _on_cancelled(self, key):
+        self.progress_bar.setValue(0)
+        self.status_label.setText("已取消")
+        self.dl_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.setEnabled(True)
+        self.download_center.mark_error(key, "已取消")
 
     def _on_error(self, key, msg):
         self.status_label.setText(f"错误: {msg}")
         self.dl_btn.setEnabled(True)
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.setEnabled(True)
         self.download_center.mark_error(key, msg)
 
 
