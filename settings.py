@@ -9,10 +9,11 @@ class Settings:
         self.defaults = {
             "download_path": str(Path.home() / "Downloads" / "bilibili"),
             "browser": "不使用Cookie",
-            "speed_limit": "",  # 空表示不限速，格式如 "5M"
+            "speed_limit": "",
             "default_resolution": "1080",
             "auto_start_download": False,
             "theme": "dark",
+            "wallpaper": "",
         }
         self.data = self.load()
 

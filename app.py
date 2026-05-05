@@ -4,10 +4,9 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
                              QComboBox, QListWidget, QListWidgetItem, QProgressBar,
-                             QFileDialog, QSplitter, QCheckBox,
-                             QDialog, QDialogButtonBox, QFrame, QScrollArea)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint, QPropertyAnimation, QEasingCurve
-from PyQt6.QtGui import QPixmap, QIcon, QAction, QColor, QPainter, QBrush
+                             QFileDialog, QFrame, QScrollArea, QStackedWidget)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint, QObject
+from PyQt6.QtGui import QPixmap, QColor, QPainter
 import yt_dlp
 from urllib.request import urlopen
 from settings import Settings
@@ -16,9 +15,22 @@ from settings_dialog import SettingsDialog
 
 BILI_PINK = "#FB7299"
 
+_NAV_STYLES = f"""
+QWidget#nav_bar {{ border-right: 1px solid; }}
+QPushButton#nav, QPushButton#nav_active {{
+    background: transparent; border: none; border-radius: 0;
+    padding: 12px 0; font-size: 11px; font-weight: 600;
+    text-align: center; width: 72px;
+}}
+QPushButton#nav_active {{ color: {BILI_PINK}; border-left: 3px solid {BILI_PINK}; }}
+"""
+
 DARK_QSS = f"""
-QWidget {{ background: #18181b; color: #fafafa; font-family: 'Segoe UI', sans-serif; font-size: 13px; }}
-QFrame#card {{ background: #27272a; border-radius: 8px; }}
+QWidget {{ background: transparent; color: #fafafa; font-family: 'Segoe UI', sans-serif; font-size: 13px; }}
+QWidget#nav_bar {{ border-right-color: #3f3f46; background: rgba(24, 24, 27, 220); }}
+QPushButton#nav {{ color: #71717a; }}
+QPushButton#nav:hover {{ color: #a1a1aa; background: rgba(39, 39, 42, 180); }}
+QFrame#card {{ background: rgba(39, 39, 42, 240); border-radius: 8px; }}
 QLineEdit, QComboBox {{
     background: #3f3f46; border: 1px solid #52525b; border-radius: 6px;
     padding: 6px 10px; color: #fafafa;
@@ -52,11 +64,14 @@ QScrollBar:vertical {{ background: #27272a; width: 6px; border-radius: 3px; }}
 QScrollBar::handle:vertical {{ background: #52525b; border-radius: 3px; }}
 QLabel#title_bar_label {{ color: {BILI_PINK}; font-weight: 700; font-size: 14px; letter-spacing: 1px; }}
 QLabel#section {{ color: #a1a1aa; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }}
-"""
+""" + _NAV_STYLES
 
 LIGHT_QSS = f"""
-QWidget {{ background: #f4f4f5; color: #18181b; font-family: 'Segoe UI', sans-serif; font-size: 13px; }}
-QFrame#card {{ background: #ffffff; border-radius: 8px; }}
+QWidget {{ background: transparent; color: #18181b; font-family: 'Segoe UI', sans-serif; font-size: 13px; }}
+QWidget#nav_bar {{ border-right-color: #e4e4e7; background: rgba(244, 244, 245, 220); }}
+QPushButton#nav {{ color: #71717a; }}
+QPushButton#nav:hover {{ color: #52525b; background: rgba(228, 228, 231, 180); }}
+QFrame#card {{ background: rgba(255, 255, 255, 240); border-radius: 8px; }}
 QLineEdit, QComboBox {{
     background: #ffffff; border: 1px solid #d4d4d8; border-radius: 6px;
     padding: 6px 10px; color: #18181b;
@@ -90,7 +105,7 @@ QScrollBar:vertical {{ background: #f4f4f5; width: 6px; border-radius: 3px; }}
 QScrollBar::handle:vertical {{ background: #d4d4d8; border-radius: 3px; }}
 QLabel#title_bar_label {{ color: {BILI_PINK}; font-weight: 700; font-size: 14px; letter-spacing: 1px; }}
 QLabel#section {{ color: #71717a; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }}
-"""
+""" + _NAV_STYLES
 
 
 class VideoInfoWorker(QThread):
@@ -152,12 +167,21 @@ class DownloadWorker(QThread):
         self.entries = entries
         self.speed_limit = speed_limit
         self._cancel = False
+        self._paused = False
 
     def cancel(self):
         self._cancel = True
 
+    def pause(self):
+        self._paused = True
+
+    def resume(self):
+        self._paused = False
+
     def run(self):
         def progress_hook(d):
+            while self._paused:
+                QThread.msleep(100)
             if self._cancel:
                 raise Exception("__cancelled__")
             if d["status"] == "downloading":
@@ -277,26 +301,77 @@ class CompletionToast(QWidget):
         QTimer.singleShot(3000, self.close)
 
 
-class DownloadCenter(QDialog):
+class NavBar(QWidget):
+    page_changed = pyqtSignal(int)
+
+    _PAGES = [("🏠\n主页", 0), ("📥\n下载中心", 1), ("👤\n个人", 2)]
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("下载中心")
-        self.setMinimumSize(480, 360)
+        self.setObjectName("nav_bar")
+        self.setFixedWidth(72)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 16, 0, 16)
+        layout.setSpacing(4)
+
+        self._btns = []
+        for label, idx in self._PAGES:
+            btn = QPushButton(label)
+            btn.setObjectName("nav")
+            btn.setFixedHeight(64)
+            btn.clicked.connect(lambda _, i=idx: self._select(i))
+            layout.addWidget(btn)
+            self._btns.append(btn)
+
+        layout.addStretch()
+        self._select(0)
+
+    def _select(self, idx):
+        for i, btn in enumerate(self._btns):
+            btn.setObjectName("nav_active" if i == idx else "nav")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        self.page_changed.emit(idx)
+
+
+class DownloadCenter(QWidget):
+    pause_requested = pyqtSignal(int)
+    cancel_requested = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self._items = {}
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
+        top_row = QHBoxLayout()
         hdr = QLabel("下载中心")
-        hdr.setStyleSheet("font-size: 16px; font-weight: bold;")
-        layout.addWidget(hdr)
+        hdr.setStyleSheet("font-size: 18px; font-weight: bold;")
+        top_row.addWidget(hdr)
+        top_row.addStretch()
+
+        sort_label = QLabel("排序:")
+        sort_label.setObjectName("section")
+        top_row.addWidget(sort_label)
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems(["最新在前", "最旧在前", "进行中优先"])
+        self.sort_combo.setFixedWidth(120)
+        self.sort_combo.currentIndexChanged.connect(self._sort_items)
+        top_row.addWidget(self.sort_combo)
+        layout.addLayout(top_row)
+
+        sub = QLabel("所有下载任务")
+        sub.setObjectName("section")
+        layout.addWidget(sub)
 
         self.list_widget = QListWidget()
         self.list_widget.setSpacing(4)
         layout.addWidget(self.list_widget)
 
-    def _make_row(self, title):
+    def _make_row(self, key, title):
         w = QWidget()
         vbox = QVBoxLayout(w)
         vbox.setContentsMargins(10, 8, 10, 8)
@@ -307,8 +382,25 @@ class DownloadCenter(QDialog):
         title_lbl.setStyleSheet("font-weight: 600;")
         top.addWidget(title_lbl)
         top.addStretch()
+
+        pause_btn = QPushButton("⏸")
+        pause_btn.setObjectName("ghost")
+        pause_btn.setFixedSize(28, 28)
+        pause_btn.setToolTip("暂停")
+        pause_btn.clicked.connect(lambda: self.pause_requested.emit(key))
+        top.addWidget(pause_btn)
+
+        cancel_btn = QPushButton("✕")
+        cancel_btn.setObjectName("ghost")
+        cancel_btn.setFixedSize(28, 28)
+        cancel_btn.setToolTip("取消")
+        cancel_btn.clicked.connect(lambda: self.cancel_requested.emit(key))
+        top.addWidget(cancel_btn)
+
         status_lbl = QLabel("0%")
         status_lbl.setObjectName("section")
+        status_lbl.setFixedWidth(80)
+        status_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         top.addWidget(status_lbl)
         vbox.addLayout(top)
 
@@ -321,13 +413,18 @@ class DownloadCenter(QDialog):
         w._title_lbl = title_lbl
         w._status_lbl = status_lbl
         w._bar = bar
+        w._pause_btn = pause_btn
+        w._cancel_btn = cancel_btn
+        w._key = key
+        w._state = "downloading"  # downloading, paused, completed, error, cancelled
+        w._progress = 0
         return w
 
     def add_download(self, key, title):
         item = QListWidgetItem()
-        row = self._make_row(title)
+        row = self._make_row(key, title)
         item.setSizeHint(row.sizeHint())
-        self.list_widget.addItem(item)
+        self.list_widget.insertItem(0, item)  # 最新在前
         self.list_widget.setItemWidget(item, row)
         self._items[key] = (item, row)
 
@@ -337,6 +434,7 @@ class DownloadCenter(QDialog):
         _, row = self._items[key]
         row._bar.setValue(pct)
         row._status_lbl.setText(f"{pct}%  {speed}" if speed else f"{pct}%")
+        row._progress = pct
 
     def mark_done(self, key):
         if key not in self._items:
@@ -346,6 +444,10 @@ class DownloadCenter(QDialog):
         row._bar.setStyleSheet(f"QProgressBar::chunk {{ background: {BILI_PINK}; border-radius: 2px; }}")
         row._status_lbl.setText("完成")
         row._status_lbl.setStyleSheet(f"color: {BILI_PINK}; font-weight: 600;")
+        row._pause_btn.setVisible(False)
+        row._cancel_btn.setVisible(False)
+        row._state = "completed"
+        row._progress = 100
 
     def mark_error(self, key, msg):
         if key not in self._items:
@@ -354,6 +456,171 @@ class DownloadCenter(QDialog):
         row._bar.setStyleSheet("QProgressBar::chunk { background: #ef4444; border-radius: 2px; }")
         row._status_lbl.setText(msg)
         row._status_lbl.setStyleSheet("color: #ef4444;")
+        row._pause_btn.setVisible(False)
+        row._cancel_btn.setVisible(False)
+        row._state = "error" if msg != "已取消" else "cancelled"
+
+    def _sort_items(self):
+        mode = self.sort_combo.currentIndex()
+        items_data = []
+        for key, (item, row) in self._items.items():
+            items_data.append((key, item, row))
+
+        if mode == 0:  # 最新在前
+            items_data.sort(key=lambda x: x[0], reverse=True)
+        elif mode == 1:  # 最旧在前
+            items_data.sort(key=lambda x: x[0])
+        elif mode == 2:  # 进行中优先
+            def sort_key(x):
+                state = x[2]._state
+                if state == "downloading":
+                    return (0, -x[0])
+                elif state == "paused":
+                    return (1, -x[0])
+                elif state == "completed":
+                    return (2, -x[0])
+                else:
+                    return (3, -x[0])
+            items_data.sort(key=sort_key)
+
+        self.list_widget.clear()
+        for key, item, row in items_data:
+            new_item = QListWidgetItem()
+            new_item.setSizeHint(row.sizeHint())
+            self.list_widget.addItem(new_item)
+            self.list_widget.setItemWidget(new_item, row)
+            self._items[key] = (new_item, row)
+
+
+class PersonalPage(QWidget):
+    def __init__(self, settings, on_open_settings, on_wallpaper_change, parent=None):
+        super().__init__(parent)
+        self.settings = settings
+        self.on_wallpaper_change = on_wallpaper_change
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 20, 20, 20)
+        outer.setSpacing(16)
+
+        hdr = QLabel("个人")
+        hdr.setStyleSheet("font-size: 18px; font-weight: bold;")
+        outer.addWidget(hdr)
+
+        # App info card
+        info_inner = QVBoxLayout()
+        info_inner.setContentsMargins(20, 18, 20, 18)
+        info_inner.setSpacing(8)
+
+        app_name = QLabel("BILI-DOWNLOADER")
+        app_name.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {BILI_PINK}; letter-spacing: 2px;")
+        info_inner.addWidget(app_name)
+
+        version = QLabel("版本 1.0.0")
+        version.setObjectName("section")
+        info_inner.addWidget(version)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color: #3f3f46;")
+        info_inner.addWidget(sep)
+
+        github_lbl = QLabel("GitHub: github.com/Fem-boy_sc")
+        github_lbl.setStyleSheet(f"color: {BILI_PINK};")
+        info_inner.addWidget(github_lbl)
+
+        copyright_lbl = QLabel("© 2025 Fem-boy_sc  保留所有权利")
+        copyright_lbl.setObjectName("section")
+        info_inner.addWidget(copyright_lbl)
+
+        outer.addWidget(_card(info_inner))
+
+        # Wallpaper card
+        wp_inner = QVBoxLayout()
+        wp_inner.setContentsMargins(20, 18, 20, 18)
+        wp_inner.setSpacing(10)
+
+        wp_sec = QLabel("背景壁纸")
+        wp_sec.setObjectName("section")
+        wp_inner.addWidget(wp_sec)
+
+        self.wp_path_label = QLabel(settings.get("wallpaper") or "未设置")
+        self.wp_path_label.setWordWrap(True)
+        self.wp_path_label.setStyleSheet("font-size: 12px;")
+        wp_inner.addWidget(self.wp_path_label)
+
+        wp_btn_row = QHBoxLayout()
+        wp_btn_row.setSpacing(8)
+        pick_btn = QPushButton("选择壁纸")
+        pick_btn.clicked.connect(self._pick_wallpaper)
+        wp_btn_row.addWidget(pick_btn)
+        clear_btn = QPushButton("清除壁纸")
+        clear_btn.setObjectName("ghost")
+        clear_btn.clicked.connect(self._clear_wallpaper)
+        wp_btn_row.addWidget(clear_btn)
+        wp_btn_row.addStretch()
+        wp_inner.addLayout(wp_btn_row)
+
+        outer.addWidget(_card(wp_inner))
+
+        # Settings shortcut card
+        cfg_inner = QVBoxLayout()
+        cfg_inner.setContentsMargins(20, 18, 20, 18)
+        cfg_inner.setSpacing(10)
+
+        cfg_sec = QLabel("应用设置")
+        cfg_sec.setObjectName("section")
+        cfg_inner.addWidget(cfg_sec)
+
+        cfg_btn = QPushButton("偏好设置")
+        cfg_btn.setObjectName("ghost")
+        cfg_btn.clicked.connect(on_open_settings)
+        cfg_inner.addWidget(cfg_btn)
+
+        outer.addWidget(_card(cfg_inner))
+        outer.addStretch()
+
+    def _pick_wallpaper(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择壁纸", "", "图片文件 (*.png *.jpg *.jpeg *.webp *.bmp)"
+        )
+        if path:
+            self.settings.set("wallpaper", path)
+            self.wp_path_label.setText(path)
+            self.on_wallpaper_change(path)
+
+    def _clear_wallpaper(self):
+        self.settings.set("wallpaper", "")
+        self.wp_path_label.setText("未设置")
+        self.on_wallpaper_change("")
+
+
+class RootWidget(QWidget):
+    """Central widget that paints the wallpaper behind all content."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._wallpaper: QPixmap | None = None
+
+    def set_wallpaper(self, path: str):
+        if path and os.path.isfile(path):
+            pix = QPixmap(path)
+            self._wallpaper = pix if not pix.isNull() else None
+        else:
+            self._wallpaper = None
+        self.update()
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if self._wallpaper:
+            p = QPainter(self)
+            p.drawPixmap(
+                self.rect(),
+                self._wallpaper.scaled(
+                    self.size(),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                ),
+            )
+            p.fillRect(self.rect(), QColor(0, 0, 0, 80))
 
 
 class MainWindow(QMainWindow):
@@ -365,27 +632,53 @@ class MainWindow(QMainWindow):
         self._worker = None
         self._dl_worker = None
         self._dl_key = 0
+        self._dl_workers = {}  # key -> worker mapping
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(860, 680)
 
-        self.download_center = DownloadCenter(self)
+        self._root = RootWidget()
+        self._root.setObjectName("root")
+        self.setCentralWidget(self._root)
 
-        root = QWidget()
-        root.setObjectName("root")
-        self.setCentralWidget(root)
-        root_layout = QVBoxLayout(root)
+        root_layout = QVBoxLayout(self._root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
         self.title_bar = TitleBar(self, self._toggle_theme, self.close)
         root_layout.addWidget(self.title_bar)
 
+        body_row = QHBoxLayout()
+        body_row.setContentsMargins(0, 0, 0, 0)
+        body_row.setSpacing(0)
+        root_layout.addLayout(body_row)
+
+        self.nav = NavBar()
+        self.nav.page_changed.connect(self._switch_page)
+        body_row.addWidget(self.nav)
+
+        self.stack = QStackedWidget()
+        body_row.addWidget(self.stack)
+
+        self._build_home_page()
+        self.download_center = DownloadCenter()
+        self.download_center.pause_requested.connect(self._pause_download)
+        self.download_center.cancel_requested.connect(self._cancel_download_by_key)
+        self.stack.addWidget(self.download_center)
+        self._personal_page = PersonalPage(
+            self.settings, self._open_settings, self._on_wallpaper_change
+        )
+        self.stack.addWidget(self._personal_page)
+
+        self._apply_theme()
+        self._load_settings_to_ui()
+        self._root.set_wallpaper(self.settings.get("wallpaper", ""))
+
+    def _build_home_page(self):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        root_layout.addWidget(scroll)
 
         body = QWidget()
         scroll.setWidget(body)
@@ -399,10 +692,8 @@ class MainWindow(QMainWindow):
         self._build_download_card()
         self._build_progress_card()
         self.body_layout.addStretch()
-        self._build_bottom_bar(root_layout)
 
-        self._apply_theme()
-        self._load_settings_to_ui()
+        self.stack.addWidget(scroll)
 
     def _build_url_card(self):
         inner = QVBoxLayout()
@@ -541,7 +832,7 @@ class MainWindow(QMainWindow):
         inner.setContentsMargins(16, 14, 16, 14)
         inner.setSpacing(8)
 
-        sec = QLabel("下载进度")
+        sec = QLabel("当前下载进度")
         sec.setObjectName("section")
         inner.addWidget(sec)
 
@@ -555,29 +846,12 @@ class MainWindow(QMainWindow):
 
         self.body_layout.addWidget(_card(inner))
 
-    def _build_bottom_bar(self, root_layout):
-        bar = QWidget()
-        bar.setFixedHeight(44)
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(20, 0, 20, 0)
-
-        settings_btn = QPushButton("偏好设置")
-        settings_btn.setObjectName("ghost")
-        settings_btn.clicked.connect(self._open_settings)
-        row.addWidget(settings_btn)
-        row.addStretch()
-
-        dc_btn = QPushButton("下载中心")
-        dc_btn.setObjectName("ghost")
-        dc_btn.clicked.connect(self.download_center.show)
-        row.addWidget(dc_btn)
-
-        root_layout.addWidget(bar)
+    def _switch_page(self, idx):
+        self.stack.setCurrentIndex(idx)
 
     def _apply_theme(self):
         qss = DARK_QSS if self.theme == "dark" else LIGHT_QSS
         self.setStyleSheet(qss)
-        self.download_center.setStyleSheet(qss)
         self.title_bar.theme_btn.setText("☀" if self.theme == "dark" else "🌙")
 
     def _toggle_theme(self):
@@ -598,6 +872,9 @@ class MainWindow(QMainWindow):
             self._load_settings_to_ui()
             self.theme = self.settings.get("theme", self.theme)
             self._apply_theme()
+
+    def _on_wallpaper_change(self, path: str):
+        self._root.set_wallpaper(path)
 
     def _browse_path(self):
         folder = QFileDialog.getExistingDirectory(self, "选择下载文件夹")
@@ -697,11 +974,38 @@ class MainWindow(QMainWindow):
         self.status_label.setText("下载中...")
 
         self._dl_worker = DownloadWorker(url, height, output_dir, browser, entries, speed_limit)
+        self._dl_workers[key] = self._dl_worker
         self._dl_worker.progress.connect(lambda pct, spd: self._on_progress(key, pct, spd))
         self._dl_worker.finished.connect(lambda _: self._on_done(key, title))
         self._dl_worker.cancelled.connect(lambda: self._on_cancelled(key))
         self._dl_worker.error.connect(lambda msg: self._on_error(key, msg))
         self._dl_worker.start()
+
+    def _pause_download(self, key):
+        if key in self._dl_workers:
+            worker = self._dl_workers[key]
+            if hasattr(worker, '_paused'):
+                if worker._paused:
+                    worker.resume()
+                    if key in self.download_center._items:
+                        _, row = self.download_center._items[key]
+                        row._pause_btn.setText("⏸")
+                        row._pause_btn.setToolTip("暂停")
+                        row._state = "downloading"
+                else:
+                    worker.pause()
+                    if key in self.download_center._items:
+                        _, row = self.download_center._items[key]
+                        row._pause_btn.setText("▶")
+                        row._pause_btn.setToolTip("继续")
+                        row._state = "paused"
+
+    def _cancel_download_by_key(self, key):
+        if key in self._dl_workers:
+            worker = self._dl_workers[key]
+            if worker.isRunning():
+                worker.cancel()
+                self.download_center.mark_error(key, "已取消")
 
     def _on_progress(self, key, pct, speed):
         self.progress_bar.setValue(pct)
@@ -721,7 +1025,9 @@ class MainWindow(QMainWindow):
         self.cancel_btn.setVisible(False)
         self.cancel_btn.setEnabled(True)
         self.download_center.mark_done(key)
-        CompletionToast(self.centralWidget(), f"下载完成 · {title}")
+        if key in self._dl_workers:
+            del self._dl_workers[key]
+        CompletionToast(self._root, f"下载完成 · {title}")
 
     def _on_cancelled(self, key):
         self.progress_bar.setValue(0)
@@ -730,6 +1036,8 @@ class MainWindow(QMainWindow):
         self.cancel_btn.setVisible(False)
         self.cancel_btn.setEnabled(True)
         self.download_center.mark_error(key, "已取消")
+        if key in self._dl_workers:
+            del self._dl_workers[key]
 
     def _on_error(self, key, msg):
         self.status_label.setText(f"错误: {msg}")
@@ -737,6 +1045,8 @@ class MainWindow(QMainWindow):
         self.cancel_btn.setVisible(False)
         self.cancel_btn.setEnabled(True)
         self.download_center.mark_error(key, msg)
+        if key in self._dl_workers:
+            del self._dl_workers[key]
 
 
 if __name__ == "__main__":
