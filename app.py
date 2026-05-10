@@ -366,6 +366,7 @@ _DL_BAR_BOTTOM = 12
 class DownloadDelegate(QStyledItemDelegate):
     pause_clicked = pyqtSignal(int)
     cancel_clicked = pyqtSignal(int)
+    delete_clicked = pyqtSignal(int)
 
     def __init__(self, parent=None, is_dark=True):
         super().__init__(parent)
@@ -383,6 +384,8 @@ class DownloadDelegate(QStyledItemDelegate):
                 "track": QColor("#3f3f46"),
                 "btn_bg": QColor("#3f3f46"),
                 "btn_text": QColor("#a1a1aa"),
+                "group_bg": QColor("#18181b"),
+                "group_text": QColor("#a1a1aa"),
             }
         return {
             "bg": QColor("#ffffff"),
@@ -391,6 +394,8 @@ class DownloadDelegate(QStyledItemDelegate):
             "track": QColor("#e4e4e7"),
             "btn_bg": QColor("#f4f4f5"),
             "btn_text": QColor("#52525b"),
+            "group_bg": QColor("#f4f4f5"),
+            "group_text": QColor("#71717a"),
         }
 
     def _bar_fill_color(self, state: str) -> QColor:
@@ -407,7 +412,15 @@ class DownloadDelegate(QStyledItemDelegate):
         pause = QRectF(cx - _DL_BTN_W * 2 - _DL_BTN_GAP, cy - _DL_BTN_H // 2, _DL_BTN_W, _DL_BTN_H)
         return pause, cancel
 
+    def _delete_rect(self, rect):
+        cx = rect.right() - _DL_MARGIN_H
+        cy = rect.top() + _DL_MARGIN_V + _DL_BTN_H // 2
+        return QRectF(cx - _DL_BTN_W, cy - _DL_BTN_H // 2, _DL_BTN_W, _DL_BTN_H)
+
     def sizeHint(self, option, index):
+        data = index.data(Qt.ItemDataRole.UserRole)
+        if data and data.get("is_group"):
+            return QSize(0, 40)
         return QSize(0, 72)
 
     def paint(self, painter, option, index):
@@ -417,22 +430,47 @@ class DownloadDelegate(QStyledItemDelegate):
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
         rect = option.rect
         c = self._colors()
 
-        # background
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(c["bg"]))
-        painter.drawRoundedRect(QRectF(rect).adjusted(2, 2, -2, -2), 6, 6)
+        # ── group header ──────────────────────────────────────────────────────
+        if data.get("is_group"):
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(c["group_bg"]))
+            painter.drawRoundedRect(QRectF(rect).adjusted(2, 2, -2, -2), 6, 6)
 
+            arrow = "▾" if data.get("expanded", True) else "▸"
+            label = f"{arrow}  {data.get('title', '')}"
+            fnt = QFont(painter.font())
+            fnt.setBold(True)
+            fnt.setPointSize(9)
+            painter.setFont(fnt)
+            painter.setPen(QPen(c["group_text"]))
+            painter.drawText(
+                QRectF(rect.left() + _DL_MARGIN_H, rect.top(), rect.width() - _DL_MARGIN_H * 2, rect.height()),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                label,
+            )
+            painter.restore()
+            return
+
+        # ── episode / single item ─────────────────────────────────────────────
         state = data.get("state", "downloading")
         title = data.get("title", "")
         status_text = data.get("status_text", "")
         progress = data.get("progress", 0)
+        is_ep = data.get("is_episode", False)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(c["bg"]))
+        left_margin = _DL_MARGIN_H * 2 if is_ep else _DL_MARGIN_H
+        painter.drawRoundedRect(QRectF(rect).adjusted(left_margin - 6, 2, -2, -2), 6, 6)
+
+        active = state in ("downloading", "paused")
+        is_error = state == "error"
 
         pause_rect, cancel_rect = self._btn_rects(rect)
-        done = state in ("completed", "error", "cancelled")
+        del_rect = self._delete_rect(rect)
 
         # title
         title_font = QFont(painter.font())
@@ -440,81 +478,117 @@ class DownloadDelegate(QStyledItemDelegate):
         title_font.setPointSize(10)
         painter.setFont(title_font)
         painter.setPen(QPen(c["text"]))
-        title_right = int(pause_rect.left()) - 8 if not done else rect.right() - _DL_MARGIN_H
-        title_rect = QRectF(rect.left() + _DL_MARGIN_H, rect.top() + _DL_MARGIN_V,
-                            title_right - rect.left() - _DL_MARGIN_H, _DL_BTN_H)
-        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                         title)
+        if active:
+            title_right = int(pause_rect.left()) - 8
+        elif is_error:
+            title_right = int(del_rect.left()) - 8
+        else:
+            title_right = rect.right() - _DL_MARGIN_H
+        title_rect = QRectF(rect.left() + left_margin, rect.top() + _DL_MARGIN_V,
+                            title_right - rect.left() - left_margin, _DL_BTN_H)
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
 
-        # status text (right of title, left of buttons)
+        # status text
         if status_text:
-            status_font = QFont(painter.font())
-            status_font.setBold(False)
-            status_font.setPointSize(9)
-            painter.setFont(status_font)
-            painter.setPen(QPen(c["muted"]))
-            status_right = int(pause_rect.left()) - 4 if not done else rect.right() - _DL_MARGIN_H
-            status_rect = QRectF(rect.left() + _DL_MARGIN_H, rect.top() + _DL_MARGIN_V,
-                                 status_right - rect.left() - _DL_MARGIN_H, _DL_BTN_H)
-            painter.drawText(status_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                             status_text)
+            sf = QFont(painter.font())
+            sf.setBold(False)
+            sf.setPointSize(9)
+            painter.setFont(sf)
+            if state == "completed":
+                painter.setPen(QPen(QColor("#4ade80")))
+            elif is_error:
+                painter.setPen(QPen(QColor("#ef4444")))
+            else:
+                painter.setPen(QPen(c["muted"]))
+            if active:
+                status_right = int(pause_rect.left()) - 4
+            elif is_error:
+                status_right = int(del_rect.left()) - 4
+            else:
+                status_right = rect.right() - _DL_MARGIN_H
+            status_rect = QRectF(rect.left() + left_margin, rect.top() + _DL_MARGIN_V,
+                                 status_right - rect.left() - left_margin, _DL_BTN_H)
+            painter.drawText(status_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, status_text)
 
         # progress bar
         bar_y = rect.bottom() - _DL_BAR_BOTTOM - _DL_BAR_H
-        bar_rect = QRectF(rect.left() + _DL_MARGIN_H, bar_y,
-                          rect.width() - _DL_MARGIN_H * 2, _DL_BAR_H)
+        bar_rect = QRectF(rect.left() + left_margin, bar_y,
+                          rect.width() - left_margin - _DL_MARGIN_H, _DL_BAR_H)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(c["track"]))
         painter.drawRoundedRect(bar_rect, 2, 2)
-
         if progress > 0:
             fill_w = bar_rect.width() * progress / 100
-            fill_rect = QRectF(bar_rect.left(), bar_rect.top(), fill_w, _DL_BAR_H)
             painter.setBrush(QBrush(self._bar_fill_color(state)))
-            painter.drawRoundedRect(fill_rect, 2, 2)
+            painter.drawRoundedRect(QRectF(bar_rect.left(), bar_rect.top(), fill_w, _DL_BAR_H), 2, 2)
 
-        # buttons (only when not done)
-        if not done:
-            for brect, icon in ((pause_rect, "⏸" if state != "paused" else "▶"),
-                                (cancel_rect, "✕")):
+        # active buttons: pause + cancel
+        if active:
+            for brect, icon in ((pause_rect, "⏸" if state != "paused" else "▶"), (cancel_rect, "✕")):
                 painter.setBrush(QBrush(c["btn_bg"]))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawRoundedRect(brect, 4, 4)
-
-                btn_font = QFont(painter.font())
-                btn_font.setPointSize(9)
-                painter.setFont(btn_font)
+                bf = QFont(painter.font())
+                bf.setPointSize(9)
+                painter.setFont(bf)
                 painter.setPen(QPen(c["btn_text"]))
                 painter.drawText(brect, Qt.AlignmentFlag.AlignCenter, icon)
+
+        # error: delete button
+        if is_error:
+            painter.setBrush(QBrush(QColor("#3f1a1a") if self._dark else QColor("#fee2e2")))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(del_rect, 4, 4)
+            bf = QFont(painter.font())
+            bf.setPointSize(9)
+            painter.setFont(bf)
+            painter.setPen(QPen(QColor("#ef4444")))
+            painter.drawText(del_rect, Qt.AlignmentFlag.AlignCenter, "✕")
 
         painter.restore()
 
     def editorEvent(self, event, model, option, index):
         from PyQt6.QtCore import QEvent
-        from PyQt6.QtGui import QMouseEvent
         if event.type() != QEvent.Type.MouseButtonRelease:
             return False
         data = index.data(Qt.ItemDataRole.UserRole)
         if not data:
             return False
-        state = data.get("state", "downloading")
-        if state in ("completed", "error", "cancelled"):
-            return False
 
-        pos = event.position() if hasattr(event, 'position') else event.pos()
-        pause_rect, cancel_rect = self._btn_rects(option.rect)
-        if cancel_rect.contains(pos.x(), pos.y()):
-            self.cancel_clicked.emit(data["key"])
+        pos = event.position() if hasattr(event, "position") else event.pos()
+
+        # group header: toggle expand
+        if data.get("is_group"):
+            self.group_toggle_requested = getattr(self, "group_toggle_requested", None)
+            if self.group_toggle_requested:
+                self.group_toggle_requested.emit(data["key"])
             return True
-        if pause_rect.contains(pos.x(), pos.y()):
-            self.pause_clicked.emit(data["key"])
-            return True
+
+        state = data.get("state", "downloading")
+        key = data["key"]
+
+        if state in ("downloading", "paused"):
+            _, cancel_rect = self._btn_rects(option.rect)
+            pause_rect, _ = self._btn_rects(option.rect)
+            if cancel_rect.contains(pos.x(), pos.y()):
+                self.cancel_clicked.emit(key)
+                return True
+            if pause_rect.contains(pos.x(), pos.y()):
+                self.pause_clicked.emit(key)
+                return True
+
+        if state == "error":
+            if self._delete_rect(option.rect).contains(pos.x(), pos.y()):
+                self.delete_clicked.emit(key)
+                return True
+
         return False
 
 
 class DownloadCenter(QWidget):
     pause_requested = pyqtSignal(int)
     cancel_requested = pyqtSignal(int)
+    delete_requested = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -537,6 +611,8 @@ class DownloadCenter(QWidget):
         self._delegate = DownloadDelegate(is_dark=True)
         self._delegate.pause_clicked.connect(self.pause_requested)
         self._delegate.cancel_clicked.connect(self.cancel_requested)
+        self._delegate.delete_clicked.connect(self.delete_requested)
+        self._delegate.group_toggle_requested = pyqtSignal(int)
 
         self._view = QListView()
         self._view.setModel(self._model)
@@ -549,13 +625,19 @@ class DownloadCenter(QWidget):
         self._view.setDefaultDropAction(Qt.DropAction.MoveAction)
         self._view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._view.setFrameShape(QFrame.Shape.NoFrame)
+        self._view.clicked.connect(self._on_view_clicked)
         layout.addWidget(self._view)
+
+        # group_key -> list of ep keys
+        self._groups: dict[int, list[int]] = {}
+        # group_key -> expanded
+        self._group_expanded: dict[int, bool] = {}
 
     def set_dark(self, is_dark: bool):
         self._delegate.set_dark(is_dark)
         self._view.viewport().update()
 
-    def _find_row(self, key: int):
+    def _find_row(self, key: int) -> int | None:
         for row in range(self._model.rowCount()):
             item = self._model.item(row)
             d = item.data(Qt.ItemDataRole.UserRole)
@@ -571,19 +653,81 @@ class DownloadCenter(QWidget):
         idx = self._model.index(row, 0)
         self._model.dataChanged.emit(idx, idx)
 
-    def add_download(self, key: int, title: str):
+    def _make_item(self, data: dict, draggable=True) -> QStandardItem:
         item = QStandardItem()
-        item.setData({
-            "key": key,
-            "title": title,
-            "progress": 0,
-            "speed": "",
-            "state": "downloading",
-            "status_text": "准备中...",
-        }, Qt.ItemDataRole.UserRole)
-        item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
-                      Qt.ItemFlag.ItemIsDragEnabled)
+        item.setData(data, Qt.ItemDataRole.UserRole)
+        flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if draggable:
+            flags |= Qt.ItemFlag.ItemIsDragEnabled
+        item.setFlags(flags)
+        return item
+
+    def add_download(self, key: int, title: str):
+        item = self._make_item({
+            "key": key, "title": title, "progress": 0,
+            "speed": "", "state": "downloading", "status_text": "准备中...",
+            "is_episode": False,
+        })
         self._model.insertRow(0, item)
+
+    def add_episode(self, group_key: int, series_title: str, ep_key: int, ep_title: str):
+        """Add an episode under a collapsible group. Creates group header if needed."""
+        if group_key not in self._groups:
+            # insert group header at top
+            group_item = self._make_item({
+                "key": group_key, "title": series_title,
+                "is_group": True, "expanded": True,
+            }, draggable=False)
+            self._model.insertRow(0, group_item)
+            self._groups[group_key] = []
+            self._group_expanded[group_key] = True
+
+        self._groups[group_key].append(ep_key)
+
+        # find group row, insert episode right after it (and after existing episodes)
+        group_row = self._find_row(group_key)
+        insert_at = group_row + len(self._groups[group_key])  # after all existing eps
+
+        ep_item = self._make_item({
+            "key": ep_key, "title": ep_title, "progress": 0,
+            "speed": "", "state": "downloading", "status_text": "准备中...",
+            "is_episode": True, "group_key": group_key,
+        })
+        self._model.insertRow(insert_at, ep_item)
+
+    def remove_item(self, key: int):
+        row = self._find_row(key)
+        if row is None:
+            return
+        d = self._model.item(row).data(Qt.ItemDataRole.UserRole)
+        group_key = d.get("group_key")
+        self._model.removeRow(row)
+
+        if group_key is not None and group_key in self._groups:
+            self._groups[group_key] = [k for k in self._groups[group_key] if k != key]
+            # remove group header if no episodes left
+            if not self._groups[group_key]:
+                g_row = self._find_row(group_key)
+                if g_row is not None:
+                    self._model.removeRow(g_row)
+                del self._groups[group_key]
+                del self._group_expanded[group_key]
+
+    def _on_view_clicked(self, index: QModelIndex):
+        data = index.data(Qt.ItemDataRole.UserRole)
+        if not data or not data.get("is_group"):
+            return
+        key = data["key"]
+        expanded = not self._group_expanded.get(key, True)
+        self._group_expanded[key] = expanded
+        g_row = self._find_row(key)
+        if g_row is not None:
+            self._update_item(g_row, {"expanded": expanded})
+        # show/hide episode rows
+        for ep_key in self._groups.get(key, []):
+            ep_row = self._find_row(ep_key)
+            if ep_row is not None:
+                self._view.setRowHidden(ep_row, not expanded)
 
     def update_progress(self, key: int, pct: int, speed: str):
         row = self._find_row(key)
@@ -603,8 +747,7 @@ class DownloadCenter(QWidget):
         row = self._find_row(key)
         if row is None:
             return
-        state = "cancelled" if msg == "已取消" else "error"
-        self._update_item(row, {"state": state, "status_text": msg})
+        self._update_item(row, {"state": "error", "status_text": msg})
 
 
 class PersonalPage(QWidget):
@@ -780,6 +923,7 @@ class MainWindow(QMainWindow):
         self.download_center = DownloadCenter()
         self.download_center.pause_requested.connect(self._pause_download)
         self.download_center.cancel_requested.connect(self._cancel_download_by_key)
+        self.download_center.delete_requested.connect(self.download_center.remove_item)
         self.stack.addWidget(self.download_center)
         self._personal_page = PersonalPage(
             self.settings, self._open_settings, self._on_wallpaper_change
@@ -1074,28 +1218,51 @@ class MainWindow(QMainWindow):
             browser = None
         speed_limit = self.settings.get("speed_limit", "")
 
-        entries = None
-        if self._info.get("entries") and self.episodes_card.isVisible():
-            selected = self.episode_list.selectedItems()
-            entries = [item.data(Qt.ItemDataRole.UserRole) for item in selected]
-
-        self._dl_key += 1
-        key = self._dl_key
-        title = self._info.get("title", "未知")
-        self.download_center.add_download(key, title)
+        series_title = self._info.get("title", "未知")
+        all_entries = self._info.get("entries", [])
+        selected_entries = []
+        if all_entries and self.episodes_card.isVisible():
+            selected_entries = [
+                item.data(Qt.ItemDataRole.UserRole)
+                for item in self.episode_list.selectedItems()
+            ]
 
         self.dl_btn.setEnabled(False)
         self.cancel_btn.setVisible(True)
         self.progress_bar.setValue(0)
         self.status_label.setText("下载中...")
 
-        self._dl_worker = DownloadWorker(url, height, output_dir, browser, entries, speed_limit)
-        self._dl_workers[key] = self._dl_worker
-        self._dl_worker.progress.connect(lambda pct, spd: self._on_progress(key, pct, spd))
-        self._dl_worker.finished.connect(lambda _: self._on_done(key, title))
-        self._dl_worker.cancelled.connect(lambda: self._on_cancelled(key))
-        self._dl_worker.error.connect(lambda msg: self._on_error(key, msg))
-        self._dl_worker.start()
+        if selected_entries:
+            # 分集下载：每集独立 worker，下载中心按合集分组
+            group_key = self._dl_key + 1  # 用第一个 key 作组 key
+            ep_keys = []
+            ep_map = {e["index"]: e["title"] for e in all_entries}
+            for ep_idx in selected_entries:
+                self._dl_key += 1
+                key = self._dl_key
+                ep_keys.append(key)
+                ep_title = ep_map.get(ep_idx, f"第{ep_idx+1}集")
+                self.download_center.add_episode(group_key, series_title, key, ep_title)
+                worker = DownloadWorker(url, height, output_dir, browser, [ep_idx], speed_limit)
+                self._dl_workers[key] = worker
+                worker.progress.connect(lambda pct, spd, k=key: self._on_progress(k, pct, spd))
+                worker.finished.connect(lambda _, k=key, t=ep_title: self._on_done(k, t))
+                worker.cancelled.connect(lambda k=key: self._on_cancelled(k))
+                worker.error.connect(lambda msg, k=key: self._on_error(k, msg))
+                worker.start()
+            self._dl_worker = self._dl_workers[ep_keys[-1]]
+        else:
+            # 单视频下载
+            self._dl_key += 1
+            key = self._dl_key
+            self.download_center.add_download(key, series_title)
+            self._dl_worker = DownloadWorker(url, height, output_dir, browser, None, speed_limit)
+            self._dl_workers[key] = self._dl_worker
+            self._dl_worker.progress.connect(lambda pct, spd: self._on_progress(key, pct, spd))
+            self._dl_worker.finished.connect(lambda _: self._on_done(key, series_title))
+            self._dl_worker.cancelled.connect(lambda: self._on_cancelled(key))
+            self._dl_worker.error.connect(lambda msg: self._on_error(key, msg))
+            self._dl_worker.start()
 
     def _pause_download(self, key):
         if key in self._dl_workers:
@@ -1131,34 +1298,34 @@ class MainWindow(QMainWindow):
         self.status_label.setText("正在取消...")
 
     def _on_done(self, key, title):
-        self.progress_bar.setValue(100)
-        self.status_label.setText("下载完成")
-        self.dl_btn.setEnabled(True)
-        self.cancel_btn.setVisible(False)
-        self.cancel_btn.setEnabled(True)
         self.download_center.mark_done(key)
         if key in self._dl_workers:
             del self._dl_workers[key]
         CompletionToast(self._root, f"下载完成 · {title}")
+        if not self._dl_workers:
+            self._reset_home_progress()
 
     def _on_cancelled(self, key):
-        self.progress_bar.setValue(0)
-        self.status_label.setText("已取消")
-        self.dl_btn.setEnabled(True)
-        self.cancel_btn.setVisible(False)
-        self.cancel_btn.setEnabled(True)
-        self.download_center.mark_error(key, "已取消")
+        self.download_center.remove_item(key)
         if key in self._dl_workers:
             del self._dl_workers[key]
+        if not self._dl_workers:
+            self._reset_home_progress()
 
     def _on_error(self, key, msg):
         self.status_label.setText(f"错误: {msg}")
-        self.dl_btn.setEnabled(True)
-        self.cancel_btn.setVisible(False)
-        self.cancel_btn.setEnabled(True)
         self.download_center.mark_error(key, msg)
         if key in self._dl_workers:
             del self._dl_workers[key]
+        if not self._dl_workers:
+            self._reset_home_progress()
+
+    def _reset_home_progress(self):
+        self.progress_bar.setValue(0)
+        self.status_label.setText("就绪")
+        self.dl_btn.setEnabled(bool(self._info))
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.setEnabled(True)
 
 
 if __name__ == "__main__":
