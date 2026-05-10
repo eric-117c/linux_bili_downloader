@@ -1304,7 +1304,8 @@ class MainWindow(QMainWindow):
 
         if selected_entries:
             # 分集下载：每集独立 worker，下载中心按合集分组
-            group_key = self._dl_key + 1  # 用第一个 key 作组 key
+            self._dl_key += 1
+            group_key = self._dl_key  # 独立消耗一个 key，不与 ep_key 重叠
             ep_keys = []
             ep_map = {e["index"]: e["title"] for e in all_entries}
             for ep_idx in selected_entries:
