@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -7,9 +8,9 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QFileDialog, QFrame, QScrollArea, QStackedWidget,
                              QListView, QStyledItemDelegate, QAbstractItemView)
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QTimer, QPoint, QObject,
-                          QSize, QRectF, QModelIndex)
+                          QSize, QRectF, QModelIndex, QPointF)
 from PyQt6.QtGui import (QPixmap, QColor, QPainter, QPen, QBrush, QFont,
-                         QStandardItemModel, QStandardItem)
+                         QStandardItemModel, QStandardItem, QCursor)
 import yt_dlp
 from urllib.request import urlopen
 from settings import Settings
@@ -600,6 +601,57 @@ class DownloadDelegate(QStyledItemDelegate):
         return False
 
 
+class DragListView(QListView):
+    """QListView that swaps UserRole dicts directly on drag-drop, avoiding Qt mime serialization."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._drag_source_row: int | None = None
+        self.setDragEnabled(False)          # we handle it ourselves
+        self.setAcceptDrops(False)
+        self.setMouseTracking(True)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            idx = self.indexAt(event.pos())
+            if idx.isValid():
+                d = idx.data(Qt.ItemDataRole.UserRole)
+                # only drag non-group rows
+                if d and not d.get("is_group"):
+                    self._drag_source_row = idx.row()
+                    self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_source_row is not None:
+            idx = self.indexAt(event.pos())
+            if idx.isValid() and idx.row() != self._drag_source_row:
+                target_d = idx.data(Qt.ItemDataRole.UserRole)
+                # don't drop onto group headers
+                if target_d and not target_d.get("is_group"):
+                    self._swap_rows(self._drag_source_row, idx.row())
+                    self._drag_source_row = idx.row()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_source_row = None
+        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        super().mouseReleaseEvent(event)
+
+    def _swap_rows(self, src: int, dst: int):
+        model = self.model()
+        src_item = model.item(src)
+        dst_item = model.item(dst)
+        if src_item is None or dst_item is None:
+            return
+        src_data = src_item.data(Qt.ItemDataRole.UserRole)
+        dst_data = dst_item.data(Qt.ItemDataRole.UserRole)
+        src_item.setData(dst_data, Qt.ItemDataRole.UserRole)
+        dst_item.setData(src_data, Qt.ItemDataRole.UserRole)
+        model.dataChanged.emit(model.index(src, 0), model.index(src, 0))
+        model.dataChanged.emit(model.index(dst, 0), model.index(dst, 0))
+
+
 class DownloadCenter(QWidget):
     pause_requested = pyqtSignal(int)
     cancel_requested = pyqtSignal(int)
@@ -629,15 +681,10 @@ class DownloadCenter(QWidget):
         self._delegate.delete_clicked.connect(self.delete_requested)
         self._delegate.group_toggle_requested = pyqtSignal(int)
 
-        self._view = QListView()
+        self._view = DragListView()
         self._view.setModel(self._model)
         self._view.setItemDelegate(self._delegate)
         self._view.setSpacing(4)
-        self._view.setDragEnabled(True)
-        self._view.setAcceptDrops(True)
-        self._view.setDropIndicatorShown(True)
-        self._view.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self._view.setDefaultDropAction(Qt.DropAction.MoveAction)
         self._view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._view.setFrameShape(QFrame.Shape.NoFrame)
         self._view.clicked.connect(self._on_view_clicked)
