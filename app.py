@@ -187,6 +187,7 @@ class DownloadWorker(QThread):
         self.speed_limit = speed_limit
         self._cancel = False
         self._paused = False
+        self._temp_files: set[str] = set()
 
     def cancel(self):
         self._cancel = True
@@ -197,12 +198,24 @@ class DownloadWorker(QThread):
     def resume(self):
         self._paused = False
 
+    def _cleanup_temp(self):
+        for path in list(self._temp_files):
+            for candidate in (path, path + ".part"):
+                try:
+                    if os.path.exists(candidate):
+                        os.remove(candidate)
+                except OSError:
+                    pass
+
     def run(self):
         def progress_hook(d):
             while self._paused:
                 QThread.msleep(100)
             if self._cancel:
                 raise Exception("__cancelled__")
+            filename = d.get("filename") or d.get("tmpfilename") or ""
+            if filename:
+                self._temp_files.add(filename)
             if d["status"] == "downloading":
                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                 done = d.get("downloaded_bytes", 0)
@@ -230,11 +243,13 @@ class DownloadWorker(QThread):
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([self.url])
             if self._cancel:
+                self._cleanup_temp()
                 self.cancelled.emit()
             else:
                 self.finished.emit(self.output_dir)
         except Exception as e:
             if "__cancelled__" in str(e) or self._cancel:
+                self._cleanup_temp()
                 self.cancelled.emit()
             else:
                 self.error.emit(str(e))
@@ -751,7 +766,7 @@ class DownloadCenter(QWidget):
 
 
 class PersonalPage(QWidget):
-    def __init__(self, settings, on_open_settings, on_wallpaper_change, parent=None):
+    def __init__(self, settings, on_open_settings, on_wallpaper_change, on_clear_cache, parent=None):
         super().__init__(parent)
         self.settings = settings
         self.on_wallpaper_change = on_wallpaper_change
@@ -811,14 +826,41 @@ class PersonalPage(QWidget):
         pick_btn = QPushButton("选择壁纸")
         pick_btn.clicked.connect(self._pick_wallpaper)
         wp_btn_row.addWidget(pick_btn)
-        clear_btn = QPushButton("清除壁纸")
-        clear_btn.setObjectName("ghost")
-        clear_btn.clicked.connect(self._clear_wallpaper)
-        wp_btn_row.addWidget(clear_btn)
+        clear_wp_btn = QPushButton("清除壁纸")
+        clear_wp_btn.setObjectName("ghost")
+        clear_wp_btn.clicked.connect(self._clear_wallpaper)
+        wp_btn_row.addWidget(clear_wp_btn)
         wp_btn_row.addStretch()
         wp_inner.addLayout(wp_btn_row)
 
         outer.addWidget(_card(wp_inner))
+
+        # Cache card
+        cache_inner = QVBoxLayout()
+        cache_inner.setContentsMargins(20, 18, 20, 18)
+        cache_inner.setSpacing(10)
+
+        cache_sec = QLabel("缓存管理")
+        cache_sec.setObjectName("section")
+        cache_inner.addWidget(cache_sec)
+
+        cache_desc = QLabel("清除下载目录中残留的 .part 临时文件")
+        cache_desc.setStyleSheet("font-size: 12px;")
+        cache_desc.setWordWrap(True)
+        cache_inner.addWidget(cache_desc)
+
+        cache_btn_row = QHBoxLayout()
+        cache_btn_row.setSpacing(8)
+        self._cache_btn = QPushButton("一键清缓存")
+        self._cache_btn.clicked.connect(lambda: self._do_clear_cache(on_clear_cache))
+        cache_btn_row.addWidget(self._cache_btn)
+        self._cache_result = QLabel("")
+        self._cache_result.setObjectName("section")
+        cache_btn_row.addWidget(self._cache_result)
+        cache_btn_row.addStretch()
+        cache_inner.addLayout(cache_btn_row)
+
+        outer.addWidget(_card(cache_inner))
 
         # Settings shortcut card
         cfg_inner = QVBoxLayout()
@@ -836,6 +878,11 @@ class PersonalPage(QWidget):
 
         outer.addWidget(_card(cfg_inner))
         outer.addStretch()
+
+    def _do_clear_cache(self, callback):
+        count = callback()
+        self._cache_result.setText(f"已清除 {count} 个文件" if count else "无残留缓存")
+        QTimer.singleShot(3000, lambda: self._cache_result.setText(""))
 
     def _pick_wallpaper(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -891,6 +938,7 @@ class MainWindow(QMainWindow):
         self._dl_worker = None
         self._dl_key = 0
         self._dl_workers = {}  # key -> worker mapping
+        self._output_dirs: set[str] = set()  # all dirs ever downloaded to
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -926,7 +974,7 @@ class MainWindow(QMainWindow):
         self.download_center.delete_requested.connect(self.download_center.remove_item)
         self.stack.addWidget(self.download_center)
         self._personal_page = PersonalPage(
-            self.settings, self._open_settings, self._on_wallpaper_change
+            self.settings, self._open_settings, self._on_wallpaper_change, self._clear_cache
         )
         self.stack.addWidget(self._personal_page)
 
@@ -1136,6 +1184,26 @@ class MainWindow(QMainWindow):
     def _on_wallpaper_change(self, path: str):
         self._root.set_wallpaper(path)
 
+    def _clear_cache(self) -> int:
+        # scan all known output dirs plus the default download path
+        dirs = set(self._output_dirs)
+        default = self.settings.get("download_path", "")
+        if default:
+            dirs.add(default)
+        count = 0
+        for d in dirs:
+            if not os.path.isdir(d):
+                continue
+            for fname in os.listdir(d):
+                if fname.endswith(".part") or fname.endswith(".ytdl") or \
+                        fname.endswith(".temp") or ".f" in fname and fname.rsplit(".", 1)[-1].isdigit():
+                    try:
+                        os.remove(os.path.join(d, fname))
+                        count += 1
+                    except OSError:
+                        pass
+        return count
+
     def _browse_path(self):
         folder = QFileDialog.getExistingDirectory(self, "选择下载文件夹")
         if folder:
@@ -1213,6 +1281,8 @@ class MainWindow(QMainWindow):
         url = self.url_input.text().strip()
         height = self.res_combo.currentData() or 1080
         output_dir = self.path_input.text().strip() or self.settings.get("download_path")
+        if output_dir:
+            self._output_dirs.add(output_dir)
         browser = self.browser_combo.currentText()
         if browser == "不使用Cookie":
             browser = None
