@@ -1,6 +1,5 @@
 import sys
 import os
-import json
 from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -8,9 +7,9 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QFileDialog, QFrame, QScrollArea, QStackedWidget,
                              QListView, QStyledItemDelegate, QAbstractItemView)
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QTimer, QPoint, QObject,
-                          QSize, QRectF, QModelIndex, QPointF)
+                          QSize, QRectF, QModelIndex)
 from PyQt6.QtGui import (QPixmap, QColor, QPainter, QPen, QBrush, QFont,
-                         QStandardItemModel, QStandardItem, QCursor)
+                         QStandardItemModel, QStandardItem)
 import yt_dlp
 from urllib.request import urlopen
 from settings import Settings
@@ -568,24 +567,15 @@ class DownloadDelegate(QStyledItemDelegate):
         if event.type() != QEvent.Type.MouseButtonRelease:
             return False
         data = index.data(Qt.ItemDataRole.UserRole)
-        if not data:
+        if not data or data.get("is_group"):
             return False
 
         pos = event.position() if hasattr(event, "position") else event.pos()
-
-        # group header: toggle expand
-        if data.get("is_group"):
-            self.group_toggle_requested = getattr(self, "group_toggle_requested", None)
-            if self.group_toggle_requested:
-                self.group_toggle_requested.emit(data["key"])
-            return True
-
         state = data.get("state", "downloading")
         key = data["key"]
 
         if state in ("downloading", "paused"):
-            _, cancel_rect = self._btn_rects(option.rect)
-            pause_rect, _ = self._btn_rects(option.rect)
+            pause_rect, cancel_rect = self._btn_rects(option.rect)
             if cancel_rect.contains(pos.x(), pos.y()):
                 self.cancel_clicked.emit(key)
                 return True
@@ -599,57 +589,6 @@ class DownloadDelegate(QStyledItemDelegate):
                 return True
 
         return False
-
-
-class DragListView(QListView):
-    """QListView that swaps UserRole dicts directly on drag-drop, avoiding Qt mime serialization."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._drag_source_row: int | None = None
-        self.setDragEnabled(False)          # we handle it ourselves
-        self.setAcceptDrops(False)
-        self.setMouseTracking(True)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            idx = self.indexAt(event.pos())
-            if idx.isValid():
-                d = idx.data(Qt.ItemDataRole.UserRole)
-                # only drag non-group rows
-                if d and not d.get("is_group"):
-                    self._drag_source_row = idx.row()
-                    self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self._drag_source_row is not None:
-            idx = self.indexAt(event.pos())
-            if idx.isValid() and idx.row() != self._drag_source_row:
-                target_d = idx.data(Qt.ItemDataRole.UserRole)
-                # don't drop onto group headers
-                if target_d and not target_d.get("is_group"):
-                    self._swap_rows(self._drag_source_row, idx.row())
-                    self._drag_source_row = idx.row()
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._drag_source_row = None
-        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
-        super().mouseReleaseEvent(event)
-
-    def _swap_rows(self, src: int, dst: int):
-        model = self.model()
-        src_item = model.item(src)
-        dst_item = model.item(dst)
-        if src_item is None or dst_item is None:
-            return
-        src_data = src_item.data(Qt.ItemDataRole.UserRole)
-        dst_data = dst_item.data(Qt.ItemDataRole.UserRole)
-        src_item.setData(dst_data, Qt.ItemDataRole.UserRole)
-        dst_item.setData(src_data, Qt.ItemDataRole.UserRole)
-        model.dataChanged.emit(model.index(src, 0), model.index(src, 0))
-        model.dataChanged.emit(model.index(dst, 0), model.index(dst, 0))
 
 
 class DownloadCenter(QWidget):
@@ -668,20 +607,14 @@ class DownloadCenter(QWidget):
         hdr.setStyleSheet("font-size: 18px; font-weight: bold;")
         layout.addWidget(hdr)
 
-        sub = QLabel("拖动行可调整顺序")
-        sub.setObjectName("section")
-        layout.addWidget(sub)
-
         self._model = QStandardItemModel(self)
-        self._model.setItemPrototype(QStandardItem())
 
         self._delegate = DownloadDelegate(is_dark=True)
         self._delegate.pause_clicked.connect(self.pause_requested)
         self._delegate.cancel_clicked.connect(self.cancel_requested)
         self._delegate.delete_clicked.connect(self.delete_requested)
-        self._delegate.group_toggle_requested = pyqtSignal(int)
 
-        self._view = DragListView()
+        self._view = QListView()
         self._view.setModel(self._model)
         self._view.setItemDelegate(self._delegate)
         self._view.setSpacing(4)
@@ -715,13 +648,10 @@ class DownloadCenter(QWidget):
         idx = self._model.index(row, 0)
         self._model.dataChanged.emit(idx, idx)
 
-    def _make_item(self, data: dict, draggable=True) -> QStandardItem:
+    def _make_item(self, data: dict) -> QStandardItem:
         item = QStandardItem()
         item.setData(data, Qt.ItemDataRole.UserRole)
-        flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        if draggable:
-            flags |= Qt.ItemFlag.ItemIsDragEnabled
-        item.setFlags(flags)
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         return item
 
     def add_download(self, key: int, title: str):
@@ -733,22 +663,19 @@ class DownloadCenter(QWidget):
         self._model.insertRow(0, item)
 
     def add_episode(self, group_key: int, series_title: str, ep_key: int, ep_title: str):
-        """Add an episode under a collapsible group. Creates group header if needed."""
         if group_key not in self._groups:
-            # insert group header at top
             group_item = self._make_item({
                 "key": group_key, "title": series_title,
                 "is_group": True, "expanded": True,
-            }, draggable=False)
+            })
             self._model.insertRow(0, group_item)
             self._groups[group_key] = []
             self._group_expanded[group_key] = True
 
         self._groups[group_key].append(ep_key)
 
-        # find group row, insert episode right after it (and after existing episodes)
         group_row = self._find_row(group_key)
-        insert_at = group_row + len(self._groups[group_key])  # after all existing eps
+        insert_at = group_row + len(self._groups[group_key])
 
         ep_item = self._make_item({
             "key": ep_key, "title": ep_title, "progress": 0,
