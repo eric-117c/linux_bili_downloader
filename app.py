@@ -176,6 +176,7 @@ class DownloadWorker(QThread):
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
     cancelled = pyqtSignal()
+    status_update = pyqtSignal(str)
 
     def __init__(self, url, height, output_dir, browser, entries=None, speed_limit=""):
         super().__init__()
@@ -224,6 +225,7 @@ class DownloadWorker(QThread):
             elif d["status"] == "finished":
                 self.progress.emit(99, "合并中...")
 
+        self.status_update.emit("解析中...")
         os.makedirs(self.output_dir, exist_ok=True)
         opts = {
             "format": f"bestvideo[height<={self.height}]+bestaudio/best[height<={self.height}]",
@@ -241,6 +243,7 @@ class DownloadWorker(QThread):
 
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
+                self.status_update.emit("建立连接...")
                 ydl.download([self.url])
             if self._cancel:
                 self._cleanup_temp()
@@ -382,6 +385,7 @@ class DownloadDelegate(QStyledItemDelegate):
     pause_clicked = pyqtSignal(int)
     cancel_clicked = pyqtSignal(int)
     delete_clicked = pyqtSignal(int)
+    retry_clicked = pyqtSignal(int)
 
     def __init__(self, parent=None, is_dark=True):
         super().__init__(parent)
@@ -427,10 +431,12 @@ class DownloadDelegate(QStyledItemDelegate):
         pause = QRectF(cx - _DL_BTN_W * 2 - _DL_BTN_GAP, cy - _DL_BTN_H // 2, _DL_BTN_W, _DL_BTN_H)
         return pause, cancel
 
-    def _delete_rect(self, rect):
+    def _error_btn_rects(self, rect):
         cx = rect.right() - _DL_MARGIN_H
         cy = rect.top() + _DL_MARGIN_V + _DL_BTN_H // 2
-        return QRectF(cx - _DL_BTN_W, cy - _DL_BTN_H // 2, _DL_BTN_W, _DL_BTN_H)
+        delete = QRectF(cx - _DL_BTN_W, cy - _DL_BTN_H // 2, _DL_BTN_W, _DL_BTN_H)
+        retry = QRectF(cx - _DL_BTN_W * 2 - _DL_BTN_GAP, cy - _DL_BTN_H // 2, _DL_BTN_W, _DL_BTN_H)
+        return retry, delete
 
     def sizeHint(self, option, index):
         data = index.data(Qt.ItemDataRole.UserRole)
@@ -482,10 +488,11 @@ class DownloadDelegate(QStyledItemDelegate):
         painter.drawRoundedRect(QRectF(rect).adjusted(left_margin - 6, 2, -2, -2), 6, 6)
 
         active = state in ("downloading", "paused")
+        is_preparing = state == "preparing"
         is_error = state == "error"
 
         pause_rect, cancel_rect = self._btn_rects(rect)
-        del_rect = self._delete_rect(rect)
+        retry_rect, del_rect = self._error_btn_rects(rect)
 
         # title
         title_font = QFont(painter.font())
@@ -495,8 +502,10 @@ class DownloadDelegate(QStyledItemDelegate):
         painter.setPen(QPen(c["text"]))
         if active:
             title_right = int(pause_rect.left()) - 8
+        elif is_preparing:
+            title_right = int(cancel_rect.left()) - 8
         elif is_error:
-            title_right = int(del_rect.left()) - 8
+            title_right = int(retry_rect.left()) - 8
         else:
             title_right = rect.right() - _DL_MARGIN_H
         title_rect = QRectF(rect.left() + left_margin, rect.top() + _DL_MARGIN_V,
@@ -517,8 +526,10 @@ class DownloadDelegate(QStyledItemDelegate):
                 painter.setPen(QPen(c["muted"]))
             if active:
                 status_right = int(pause_rect.left()) - 4
+            elif is_preparing:
+                status_right = int(cancel_rect.left()) - 4
             elif is_error:
-                status_right = int(del_rect.left()) - 4
+                status_right = int(retry_rect.left()) - 4
             else:
                 status_right = rect.right() - _DL_MARGIN_H
             status_rect = QRectF(rect.left() + left_margin, rect.top() + _DL_MARGIN_V,
@@ -549,16 +560,31 @@ class DownloadDelegate(QStyledItemDelegate):
                 painter.setPen(QPen(c["btn_text"]))
                 painter.drawText(brect, Qt.AlignmentFlag.AlignCenter, icon)
 
-        # error: delete button
-        if is_error:
-            painter.setBrush(QBrush(QColor("#3f1a1a") if self._dark else QColor("#fee2e2")))
+        # preparing: cancel only
+        if is_preparing:
+            painter.setBrush(QBrush(c["btn_bg"]))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(del_rect, 4, 4)
+            painter.drawRoundedRect(cancel_rect, 4, 4)
             bf = QFont(painter.font())
             bf.setPointSize(9)
             painter.setFont(bf)
-            painter.setPen(QPen(QColor("#ef4444")))
-            painter.drawText(del_rect, Qt.AlignmentFlag.AlignCenter, "✕")
+            painter.setPen(QPen(c["btn_text"]))
+            painter.drawText(cancel_rect, Qt.AlignmentFlag.AlignCenter, "✕")
+
+        # error: retry + delete buttons
+        if is_error:
+            bf = QFont(painter.font())
+            bf.setPointSize(9)
+            painter.setFont(bf)
+            for brect, bg_dark, bg_light, icon, icon_color in (
+                (retry_rect, "#1a3040", "#dbeafe", "↻", "#60a5fa"),
+                (del_rect, "#3f1a1a", "#fee2e2", "✕", "#ef4444"),
+            ):
+                painter.setBrush(QBrush(QColor(bg_dark) if self._dark else QColor(bg_light)))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(brect, 4, 4)
+                painter.setPen(QPen(QColor(icon_color)))
+                painter.drawText(brect, Qt.AlignmentFlag.AlignCenter, icon)
 
         painter.restore()
 
@@ -583,9 +609,19 @@ class DownloadDelegate(QStyledItemDelegate):
                 self.pause_clicked.emit(key)
                 return True
 
+        if state == "preparing":
+            _, cancel_rect = self._btn_rects(option.rect)
+            if cancel_rect.contains(pos.x(), pos.y()):
+                self.cancel_clicked.emit(key)
+                return True
+
         if state == "error":
-            if self._delete_rect(option.rect).contains(pos.x(), pos.y()):
+            retry_rect, del_rect = self._error_btn_rects(option.rect)
+            if del_rect.contains(pos.x(), pos.y()):
                 self.delete_clicked.emit(key)
+                return True
+            if retry_rect.contains(pos.x(), pos.y()):
+                self.retry_clicked.emit(key)
                 return True
 
         return False
@@ -595,6 +631,7 @@ class DownloadCenter(QWidget):
     pause_requested = pyqtSignal(int)
     cancel_requested = pyqtSignal(int)
     delete_requested = pyqtSignal(int)
+    retry_requested = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -613,6 +650,7 @@ class DownloadCenter(QWidget):
         self._delegate.pause_clicked.connect(self.pause_requested)
         self._delegate.cancel_clicked.connect(self.cancel_requested)
         self._delegate.delete_clicked.connect(self.delete_requested)
+        self._delegate.retry_clicked.connect(self.retry_requested)
 
         self._view = QListView()
         self._view.setModel(self._model)
@@ -657,7 +695,7 @@ class DownloadCenter(QWidget):
     def add_download(self, key: int, title: str):
         item = self._make_item({
             "key": key, "title": title, "progress": 0,
-            "speed": "", "state": "downloading", "status_text": "准备中...",
+            "speed": "", "state": "preparing", "status_text": "准备中...",
             "is_episode": False,
         })
         self._model.insertRow(0, item)
@@ -679,7 +717,7 @@ class DownloadCenter(QWidget):
 
         ep_item = self._make_item({
             "key": ep_key, "title": ep_title, "progress": 0,
-            "speed": "", "state": "downloading", "status_text": "准备中...",
+            "speed": "", "state": "preparing", "status_text": "准备中...",
             "is_episode": True, "group_key": group_key,
         })
         self._model.insertRow(insert_at, ep_item)
@@ -726,17 +764,35 @@ class DownloadCenter(QWidget):
         self._update_item(row, {"progress": pct, "speed": speed,
                                 "state": "downloading", "status_text": status})
 
+    def update_status(self, key: int, text: str):
+        row = self._find_row(key)
+        if row is None:
+            return
+        self._update_item(row, {"status_text": text})
+
     def mark_done(self, key: int):
         row = self._find_row(key)
         if row is None:
             return
         self._update_item(row, {"progress": 100, "state": "completed", "status_text": "完成"})
+        QTimer.singleShot(2500, lambda: self.remove_item(key))
 
     def mark_error(self, key: int, msg: str):
         row = self._find_row(key)
         if row is None:
             return
         self._update_item(row, {"state": "error", "status_text": msg})
+
+    def set_retry_params(self, key: int, params: dict):
+        row = self._find_row(key)
+        if row is not None:
+            self._update_item(row, {"retry_params": params})
+
+    def get_retry_params(self, key: int) -> dict | None:
+        row = self._find_row(key)
+        if row is None:
+            return None
+        return self._model.item(row).data(Qt.ItemDataRole.UserRole).get("retry_params")
 
 
 class PersonalPage(QWidget):
@@ -912,6 +968,8 @@ class MainWindow(QMainWindow):
         self._dl_worker = None
         self._dl_key = 0
         self._dl_workers = {}  # key -> worker mapping
+        self._pending_workers: list[tuple[int, DownloadWorker]] = []
+        self._active_dl_count = 0
         self._output_dirs: set[str] = set()  # all dirs ever downloaded to
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -946,6 +1004,7 @@ class MainWindow(QMainWindow):
         self.download_center.pause_requested.connect(self._pause_download)
         self.download_center.cancel_requested.connect(self._cancel_download_by_key)
         self.download_center.delete_requested.connect(self.download_center.remove_item)
+        self.download_center.retry_requested.connect(self._retry_download)
         self.stack.addWidget(self.download_center)
         self._personal_page = PersonalPage(
             self.settings, self._open_settings, self._on_wallpaper_change, self._clear_cache
@@ -1275,7 +1334,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText("下载中...")
 
         if selected_entries:
-            # 并发下载：每集独立 worker 同时启动
+            # 并发下载：最多同时 3 个，其余排队
             self._dl_key += 1
             group_key = self._dl_key
             ep_map = {e["index"]: e["title"] for e in all_entries}
@@ -1290,7 +1349,13 @@ class MainWindow(QMainWindow):
                 worker.finished.connect(lambda _, k=key, t=ep_title: self._on_done(k, t))
                 worker.cancelled.connect(lambda k=key: self._on_cancelled(k))
                 worker.error.connect(lambda msg, k=key: self._on_error(k, msg))
-                worker.start()
+                worker.status_update.connect(lambda txt, k=key: self.download_center.update_status(k, txt))
+                self.download_center.set_retry_params(key, {
+                    "url": url, "height": height, "output_dir": output_dir,
+                    "browser": browser, "entries": [ep_idx], "speed_limit": speed_limit,
+                    "title": ep_title,
+                })
+                self._enqueue_worker(key, worker)
             self._dl_worker = worker
         else:
             # 单视频下载
@@ -1303,7 +1368,29 @@ class MainWindow(QMainWindow):
             self._dl_worker.finished.connect(lambda _: self._on_done(key, series_title))
             self._dl_worker.cancelled.connect(lambda: self._on_cancelled(key))
             self._dl_worker.error.connect(lambda msg: self._on_error(key, msg))
+            self._dl_worker.status_update.connect(lambda txt, k=key: self.download_center.update_status(k, txt))
             self._dl_worker.start()
+            self.download_center.set_retry_params(key, {
+                "url": url, "height": height, "output_dir": output_dir,
+                "browser": browser, "entries": None, "speed_limit": speed_limit,
+                "title": series_title,
+            })
+
+    _MAX_CONCURRENT = 3
+
+    def _enqueue_worker(self, key: int, worker: DownloadWorker):
+        if self._active_dl_count < self._MAX_CONCURRENT:
+            self._active_dl_count += 1
+            worker.start()
+        else:
+            self._pending_workers.append((key, worker))
+
+    def _on_worker_slot_freed(self):
+        if self._pending_workers:
+            _, next_worker = self._pending_workers.pop(0)
+            next_worker.start()
+        else:
+            self._active_dl_count -= 1
 
     def _pause_download(self, key):
         if key in self._dl_workers:
@@ -1341,15 +1428,19 @@ class MainWindow(QMainWindow):
         self.download_center.mark_done(key)
         if key in self._dl_workers:
             del self._dl_workers[key]
+        self._on_worker_slot_freed()
         CompletionToast(self._root, f"下载完成 · {title}")
-        if not self._dl_workers:
+        if not self._dl_workers and not self._pending_workers:
             self._reset_home_progress()
 
     def _on_cancelled(self, key):
         self.download_center.remove_item(key)
         if key in self._dl_workers:
             del self._dl_workers[key]
-        if not self._dl_workers:
+        # also remove from pending queue if not yet started
+        self._pending_workers = [(k, w) for k, w in self._pending_workers if k != key]
+        self._on_worker_slot_freed()
+        if not self._dl_workers and not self._pending_workers:
             self._reset_home_progress()
 
     def _on_error(self, key, msg):
@@ -1357,8 +1448,31 @@ class MainWindow(QMainWindow):
         self.download_center.mark_error(key, msg)
         if key in self._dl_workers:
             del self._dl_workers[key]
-        if not self._dl_workers:
+        self._on_worker_slot_freed()
+        if not self._dl_workers and not self._pending_workers:
             self._reset_home_progress()
+
+    def _retry_download(self, key: int):
+        params = self.download_center.get_retry_params(key)
+        if not params:
+            return
+        row = self.download_center._find_row(key)
+        if row is None:
+            return
+        self.download_center._update_item(row, {
+            "state": "downloading", "progress": 0, "status_text": "准备中..."
+        })
+        worker = DownloadWorker(
+            params["url"], params["height"], params["output_dir"],
+            params["browser"], params["entries"], params["speed_limit"]
+        )
+        self._dl_workers[key] = worker
+        title = params["title"]
+        worker.progress.connect(lambda pct, spd, k=key: self._on_progress(k, pct, spd))
+        worker.finished.connect(lambda _, k=key, t=title: self._on_done(k, t))
+        worker.cancelled.connect(lambda k=key: self._on_cancelled(k))
+        worker.error.connect(lambda msg, k=key: self._on_error(k, msg))
+        self._enqueue_worker(key, worker)
 
     def _reset_home_progress(self):
         self.progress_bar.setValue(0)
