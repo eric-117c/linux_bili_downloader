@@ -844,7 +844,7 @@ class PersonalPage(QWidget):
         cache_sec.setObjectName("section")
         cache_inner.addWidget(cache_sec)
 
-        cache_desc = QLabel("清除下载目录中残留的 .part 临时文件")
+        cache_desc = QLabel("仅清除下载中断留下的 .part 临时文件，不影响已下载的视频")
         cache_desc.setStyleSheet("font-size: 12px;")
         cache_desc.setWordWrap(True)
         cache_inner.addWidget(cache_desc)
@@ -1185,7 +1185,6 @@ class MainWindow(QMainWindow):
         self._root.set_wallpaper(path)
 
     def _clear_cache(self) -> int:
-        # scan all known output dirs plus the default download path
         dirs = set(self._output_dirs)
         default = self.settings.get("download_path", "")
         if default:
@@ -1195,8 +1194,7 @@ class MainWindow(QMainWindow):
             if not os.path.isdir(d):
                 continue
             for fname in os.listdir(d):
-                if fname.endswith(".part") or fname.endswith(".ytdl") or \
-                        fname.endswith(".temp") or ".f" in fname and fname.rsplit(".", 1)[-1].isdigit():
+                if fname.endswith(".part"):
                     try:
                         os.remove(os.path.join(d, fname))
                         count += 1
