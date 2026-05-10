@@ -1275,24 +1275,23 @@ class MainWindow(QMainWindow):
         self.status_label.setText("下载中...")
 
         if selected_entries:
-            # 串行下载：先把所有集注册到下载中心，再逐集启动
+            # 并发下载：每集独立 worker 同时启动
             self._dl_key += 1
             group_key = self._dl_key
             ep_map = {e["index"]: e["title"] for e in all_entries}
-
-            # 预先分配 key 并注册 UI 行
-            queue: list[tuple[int, int, str]] = []  # (key, ep_idx, ep_title)
             for ep_idx in selected_entries:
                 self._dl_key += 1
                 key = self._dl_key
                 ep_title = ep_map.get(ep_idx, f"第{ep_idx+1}集")
                 self.download_center.add_episode(group_key, series_title, key, ep_title)
-                queue.append((key, ep_idx, ep_title))
-
-            self._ep_queue = queue          # 待下载队列
-            self._ep_group_key = group_key
-            self._ep_params = (url, height, output_dir, browser, speed_limit)
-            self._start_next_episode()
+                worker = DownloadWorker(url, height, output_dir, browser, [ep_idx], speed_limit)
+                self._dl_workers[key] = worker
+                worker.progress.connect(lambda pct, spd, k=key: self._on_progress(k, pct, spd))
+                worker.finished.connect(lambda _, k=key, t=ep_title: self._on_done(k, t))
+                worker.cancelled.connect(lambda k=key: self._on_cancelled(k))
+                worker.error.connect(lambda msg, k=key: self._on_error(k, msg))
+                worker.start()
+            self._dl_worker = worker
         else:
             # 单视频下载
             self._dl_key += 1
@@ -1305,20 +1304,6 @@ class MainWindow(QMainWindow):
             self._dl_worker.cancelled.connect(lambda: self._on_cancelled(key))
             self._dl_worker.error.connect(lambda msg: self._on_error(key, msg))
             self._dl_worker.start()
-
-    def _start_next_episode(self):
-        if not getattr(self, "_ep_queue", None):
-            return
-        key, ep_idx, ep_title = self._ep_queue.pop(0)
-        url, height, output_dir, browser, speed_limit = self._ep_params
-        worker = DownloadWorker(url, height, output_dir, browser, [ep_idx], speed_limit)
-        self._dl_workers[key] = worker
-        self._dl_worker = worker
-        worker.progress.connect(lambda pct, spd, k=key: self._on_progress(k, pct, spd))
-        worker.finished.connect(lambda _, k=key, t=ep_title: self._on_done(k, t))
-        worker.cancelled.connect(lambda k=key: self._on_cancelled(k))
-        worker.error.connect(lambda msg, k=key: self._on_error(k, msg))
-        worker.start()
 
     def _pause_download(self, key):
         if key in self._dl_workers:
@@ -1336,13 +1321,6 @@ class MainWindow(QMainWindow):
                         self.download_center._update_item(row, {"state": "paused"})
 
     def _cancel_download_by_key(self, key):
-        # if the key is still in the queue (not yet started), just remove it
-        queue = getattr(self, "_ep_queue", [])
-        for item in queue:
-            if item[0] == key:
-                self._ep_queue.remove(item)
-                self.download_center.remove_item(key)
-                return
         if key in self._dl_workers:
             worker = self._dl_workers[key]
             if worker.isRunning():
@@ -1354,8 +1332,6 @@ class MainWindow(QMainWindow):
         self.download_center.update_progress(key, pct, speed)
 
     def _cancel_download(self):
-        # clear queued episodes first so _on_cancelled doesn't start the next one
-        self._ep_queue = []
         if self._dl_worker and self._dl_worker.isRunning():
             self._dl_worker.cancel()
         self.cancel_btn.setEnabled(False)
@@ -1366,19 +1342,13 @@ class MainWindow(QMainWindow):
         if key in self._dl_workers:
             del self._dl_workers[key]
         CompletionToast(self._root, f"下载完成 · {title}")
-        if getattr(self, "_ep_queue", None):
-            self._start_next_episode()
-        elif not self._dl_workers:
+        if not self._dl_workers:
             self._reset_home_progress()
 
     def _on_cancelled(self, key):
         self.download_center.remove_item(key)
         if key in self._dl_workers:
             del self._dl_workers[key]
-        # cancel remaining queued episodes too
-        for queued_key, _, _ in getattr(self, "_ep_queue", []):
-            self.download_center.remove_item(queued_key)
-        self._ep_queue = []
         if not self._dl_workers:
             self._reset_home_progress()
 
@@ -1387,10 +1357,7 @@ class MainWindow(QMainWindow):
         self.download_center.mark_error(key, msg)
         if key in self._dl_workers:
             del self._dl_workers[key]
-        # continue with next episode even if one fails
-        if getattr(self, "_ep_queue", None):
-            self._start_next_episode()
-        elif not self._dl_workers:
+        if not self._dl_workers:
             self._reset_home_progress()
 
     def _reset_home_progress(self):
