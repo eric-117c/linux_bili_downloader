@@ -9,6 +9,9 @@ class SettingsDialog(QDialog):
         self.settings = settings
         self.setWindowTitle("偏好设置")
         self.setMinimumWidth(500)
+        # inherit stylesheet from parent so light/dark theme applies
+        if parent:
+            self.setStyleSheet(parent.styleSheet())
         self.init_ui()
 
     def init_ui(self):

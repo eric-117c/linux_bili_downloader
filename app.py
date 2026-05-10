@@ -4,9 +4,12 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
                              QComboBox, QListWidget, QListWidgetItem, QProgressBar,
-                             QFileDialog, QFrame, QScrollArea, QStackedWidget)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint, QObject
-from PyQt6.QtGui import QPixmap, QColor, QPainter
+                             QFileDialog, QFrame, QScrollArea, QStackedWidget,
+                             QListView, QStyledItemDelegate, QAbstractItemView)
+from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QTimer, QPoint, QObject,
+                          QSize, QRectF, QModelIndex)
+from PyQt6.QtGui import (QPixmap, QColor, QPainter, QPen, QBrush, QFont,
+                         QStandardItemModel, QStandardItem)
 import yt_dlp
 from urllib.request import urlopen
 from settings import Settings
@@ -27,6 +30,7 @@ QPushButton#nav_active {{ color: {BILI_PINK}; border-left: 3px solid {BILI_PINK}
 
 DARK_QSS = f"""
 QWidget {{ background: transparent; color: #fafafa; font-family: 'Segoe UI', sans-serif; font-size: 13px; }}
+QDialog {{ background: #18181b; }}
 QWidget#nav_bar {{ border-right-color: #3f3f46; background: rgba(24, 24, 27, 220); }}
 QPushButton#nav {{ color: #71717a; }}
 QPushButton#nav:hover {{ color: #a1a1aa; background: rgba(39, 39, 42, 180); }}
@@ -37,6 +41,10 @@ QLineEdit, QComboBox {{
 }}
 QLineEdit:focus, QComboBox:focus {{ border-color: {BILI_PINK}; }}
 QComboBox::drop-down {{ border: none; width: 24px; }}
+QComboBox QAbstractItemView {{
+    background: #27272a; color: #fafafa; border: 1px solid #52525b;
+    selection-background-color: #3f3f46; selection-color: {BILI_PINK};
+}}
 QPushButton {{
     background: {BILI_PINK}; color: white; border: none; border-radius: 6px;
     padding: 7px 16px; font-weight: 600;
@@ -68,9 +76,10 @@ QLabel#section {{ color: #a1a1aa; font-size: 11px; font-weight: 600; letter-spac
 
 LIGHT_QSS = f"""
 QWidget {{ background: transparent; color: #18181b; font-family: 'Segoe UI', sans-serif; font-size: 13px; }}
+QDialog {{ background: #f4f4f5; }}
 QWidget#nav_bar {{ border-right-color: #e4e4e7; background: rgba(244, 244, 245, 220); }}
-QPushButton#nav {{ color: #71717a; }}
-QPushButton#nav:hover {{ color: #52525b; background: rgba(228, 228, 231, 180); }}
+QPushButton#nav {{ color: #52525b; }}
+QPushButton#nav:hover {{ color: #18181b; background: rgba(228, 228, 231, 180); }}
 QFrame#card {{ background: rgba(255, 255, 255, 240); border-radius: 8px; }}
 QLineEdit, QComboBox {{
     background: #ffffff; border: 1px solid #d4d4d8; border-radius: 6px;
@@ -78,33 +87,43 @@ QLineEdit, QComboBox {{
 }}
 QLineEdit:focus, QComboBox:focus {{ border-color: {BILI_PINK}; }}
 QComboBox::drop-down {{ border: none; width: 24px; }}
+QComboBox QAbstractItemView {{
+    background: #ffffff; color: #18181b; border: 1px solid #d4d4d8;
+    selection-background-color: #fce7ef; selection-color: {BILI_PINK};
+}}
 QPushButton {{
     background: {BILI_PINK}; color: white; border: none; border-radius: 6px;
     padding: 7px 16px; font-weight: 600;
 }}
-QPushButton:hover {{ background: #fc8fad; }}
-QPushButton:disabled {{ background: #d4d4d8; color: #a1a1aa; }}
+QPushButton:hover {{ background: #e85c85; }}
+QPushButton:disabled {{ background: #d4d4d8; color: #71717a; }}
 QPushButton#ghost {{
-    background: transparent; color: #71717a; border: 1px solid #d4d4d8;
+    background: transparent; color: #52525b; border: 1px solid #d4d4d8;
 }}
-QPushButton#ghost:hover {{ border-color: {BILI_PINK}; color: {BILI_PINK}; }}
-QPushButton#close {{ background: transparent; color: #71717a; border: none; font-size: 16px; padding: 4px 10px; }}
+QPushButton#ghost:hover {{ border-color: {BILI_PINK}; color: {BILI_PINK}; background: #fce7ef; }}
+QPushButton#close {{ background: transparent; color: #52525b; border: none; font-size: 16px; padding: 4px 10px; }}
 QPushButton#close:hover {{ background: #ef4444; color: white; border-radius: 4px; }}
-QPushButton#theme {{ background: transparent; color: #71717a; border: none; font-size: 14px; padding: 4px 8px; }}
+QPushButton#theme {{ background: transparent; color: #52525b; border: none; font-size: 14px; padding: 4px 8px; }}
 QPushButton#theme:hover {{ color: {BILI_PINK}; }}
 QProgressBar {{
     background: #e4e4e7; border-radius: 4px; height: 6px; text-align: center;
 }}
 QProgressBar::chunk {{ background: {BILI_PINK}; border-radius: 4px; }}
 QListWidget {{
-    background: #ffffff; border: 1px solid #e4e4e7; border-radius: 6px;
+    background: #ffffff; border: 1px solid #e4e4e7; border-radius: 6px; color: #18181b;
 }}
-QListWidget::item {{ padding: 6px 10px; border-radius: 4px; }}
+QListWidget::item {{ padding: 6px 10px; border-radius: 4px; color: #18181b; }}
 QListWidget::item:selected {{ background: #fce7ef; color: {BILI_PINK}; }}
+QListWidget::item:hover {{ background: #f4f4f5; }}
 QScrollBar:vertical {{ background: #f4f4f5; width: 6px; border-radius: 3px; }}
 QScrollBar::handle:vertical {{ background: #d4d4d8; border-radius: 3px; }}
+QLabel {{ color: #18181b; }}
 QLabel#title_bar_label {{ color: {BILI_PINK}; font-weight: 700; font-size: 14px; letter-spacing: 1px; }}
-QLabel#section {{ color: #71717a; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }}
+QLabel#section {{ color: #52525b; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }}
+QCheckBox {{ color: #18181b; }}
+QCheckBox::indicator {{ border: 1px solid #d4d4d8; border-radius: 3px; background: #fff; }}
+QCheckBox::indicator:checked {{ background: {BILI_PINK}; border-color: {BILI_PINK}; }}
+QDialogButtonBox QPushButton {{ min-width: 72px; }}
 """ + _NAV_STYLES
 
 
@@ -335,161 +354,257 @@ class NavBar(QWidget):
         self.page_changed.emit(idx)
 
 
+_DL_MARGIN_H = 14
+_DL_MARGIN_V = 10
+_DL_BTN_W = 26
+_DL_BTN_H = 26
+_DL_BTN_GAP = 6
+_DL_BAR_H = 5
+_DL_BAR_BOTTOM = 12
+
+
+class DownloadDelegate(QStyledItemDelegate):
+    pause_clicked = pyqtSignal(int)
+    cancel_clicked = pyqtSignal(int)
+
+    def __init__(self, parent=None, is_dark=True):
+        super().__init__(parent)
+        self._dark = is_dark
+
+    def set_dark(self, is_dark: bool):
+        self._dark = is_dark
+
+    def _colors(self):
+        if self._dark:
+            return {
+                "bg": QColor("#27272a"),
+                "text": QColor("#fafafa"),
+                "muted": QColor("#a1a1aa"),
+                "track": QColor("#3f3f46"),
+                "btn_bg": QColor("#3f3f46"),
+                "btn_text": QColor("#a1a1aa"),
+            }
+        return {
+            "bg": QColor("#ffffff"),
+            "text": QColor("#18181b"),
+            "muted": QColor("#71717a"),
+            "track": QColor("#e4e4e7"),
+            "btn_bg": QColor("#f4f4f5"),
+            "btn_text": QColor("#52525b"),
+        }
+
+    def _bar_fill_color(self, state: str) -> QColor:
+        if state == "completed":
+            return QColor("#4ade80")
+        if state in ("error", "cancelled"):
+            return QColor("#ef4444")
+        return QColor(BILI_PINK)
+
+    def _btn_rects(self, rect):
+        cx = rect.right() - _DL_MARGIN_H
+        cy = rect.top() + _DL_MARGIN_V + _DL_BTN_H // 2
+        cancel = QRectF(cx - _DL_BTN_W, cy - _DL_BTN_H // 2, _DL_BTN_W, _DL_BTN_H)
+        pause = QRectF(cx - _DL_BTN_W * 2 - _DL_BTN_GAP, cy - _DL_BTN_H // 2, _DL_BTN_W, _DL_BTN_H)
+        return pause, cancel
+
+    def sizeHint(self, option, index):
+        return QSize(0, 72)
+
+    def paint(self, painter, option, index):
+        data = index.data(Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = option.rect
+        c = self._colors()
+
+        # background
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(c["bg"]))
+        painter.drawRoundedRect(QRectF(rect).adjusted(2, 2, -2, -2), 6, 6)
+
+        state = data.get("state", "downloading")
+        title = data.get("title", "")
+        status_text = data.get("status_text", "")
+        progress = data.get("progress", 0)
+
+        pause_rect, cancel_rect = self._btn_rects(rect)
+        done = state in ("completed", "error", "cancelled")
+
+        # title
+        title_font = QFont(painter.font())
+        title_font.setBold(True)
+        title_font.setPointSize(10)
+        painter.setFont(title_font)
+        painter.setPen(QPen(c["text"]))
+        title_right = int(pause_rect.left()) - 8 if not done else rect.right() - _DL_MARGIN_H
+        title_rect = QRectF(rect.left() + _DL_MARGIN_H, rect.top() + _DL_MARGIN_V,
+                            title_right - rect.left() - _DL_MARGIN_H, _DL_BTN_H)
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         title)
+
+        # status text (right of title, left of buttons)
+        if status_text:
+            status_font = QFont(painter.font())
+            status_font.setBold(False)
+            status_font.setPointSize(9)
+            painter.setFont(status_font)
+            painter.setPen(QPen(c["muted"]))
+            status_right = int(pause_rect.left()) - 4 if not done else rect.right() - _DL_MARGIN_H
+            status_rect = QRectF(rect.left() + _DL_MARGIN_H, rect.top() + _DL_MARGIN_V,
+                                 status_right - rect.left() - _DL_MARGIN_H, _DL_BTN_H)
+            painter.drawText(status_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             status_text)
+
+        # progress bar
+        bar_y = rect.bottom() - _DL_BAR_BOTTOM - _DL_BAR_H
+        bar_rect = QRectF(rect.left() + _DL_MARGIN_H, bar_y,
+                          rect.width() - _DL_MARGIN_H * 2, _DL_BAR_H)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(c["track"]))
+        painter.drawRoundedRect(bar_rect, 2, 2)
+
+        if progress > 0:
+            fill_w = bar_rect.width() * progress / 100
+            fill_rect = QRectF(bar_rect.left(), bar_rect.top(), fill_w, _DL_BAR_H)
+            painter.setBrush(QBrush(self._bar_fill_color(state)))
+            painter.drawRoundedRect(fill_rect, 2, 2)
+
+        # buttons (only when not done)
+        if not done:
+            for brect, icon in ((pause_rect, "⏸" if state != "paused" else "▶"),
+                                (cancel_rect, "✕")):
+                painter.setBrush(QBrush(c["btn_bg"]))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(brect, 4, 4)
+
+                btn_font = QFont(painter.font())
+                btn_font.setPointSize(9)
+                painter.setFont(btn_font)
+                painter.setPen(QPen(c["btn_text"]))
+                painter.drawText(brect, Qt.AlignmentFlag.AlignCenter, icon)
+
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        from PyQt6.QtCore import QEvent
+        from PyQt6.QtGui import QMouseEvent
+        if event.type() != QEvent.Type.MouseButtonRelease:
+            return False
+        data = index.data(Qt.ItemDataRole.UserRole)
+        if not data:
+            return False
+        state = data.get("state", "downloading")
+        if state in ("completed", "error", "cancelled"):
+            return False
+
+        pos = event.position() if hasattr(event, 'position') else event.pos()
+        pause_rect, cancel_rect = self._btn_rects(option.rect)
+        if cancel_rect.contains(pos.x(), pos.y()):
+            self.cancel_clicked.emit(data["key"])
+            return True
+        if pause_rect.contains(pos.x(), pos.y()):
+            self.pause_clicked.emit(data["key"])
+            return True
+        return False
+
+
 class DownloadCenter(QWidget):
     pause_requested = pyqtSignal(int)
     cancel_requested = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._items = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        top_row = QHBoxLayout()
         hdr = QLabel("下载中心")
         hdr.setStyleSheet("font-size: 18px; font-weight: bold;")
-        top_row.addWidget(hdr)
-        top_row.addStretch()
+        layout.addWidget(hdr)
 
-        sort_label = QLabel("排序:")
-        sort_label.setObjectName("section")
-        top_row.addWidget(sort_label)
-        self.sort_combo = QComboBox()
-        self.sort_combo.addItems(["最新在前", "最旧在前", "进行中优先"])
-        self.sort_combo.setFixedWidth(120)
-        self.sort_combo.currentIndexChanged.connect(self._sort_items)
-        top_row.addWidget(self.sort_combo)
-        layout.addLayout(top_row)
-
-        sub = QLabel("所有下载任务")
+        sub = QLabel("拖动行可调整顺序")
         sub.setObjectName("section")
         layout.addWidget(sub)
 
-        self.list_widget = QListWidget()
-        self.list_widget.setSpacing(4)
-        layout.addWidget(self.list_widget)
+        self._model = QStandardItemModel(self)
+        self._model.setItemPrototype(QStandardItem())
 
-    def _make_row(self, key, title):
-        w = QWidget()
-        vbox = QVBoxLayout(w)
-        vbox.setContentsMargins(10, 8, 10, 8)
-        vbox.setSpacing(4)
+        self._delegate = DownloadDelegate(is_dark=True)
+        self._delegate.pause_clicked.connect(self.pause_requested)
+        self._delegate.cancel_clicked.connect(self.cancel_requested)
 
-        top = QHBoxLayout()
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet("font-weight: 600;")
-        top.addWidget(title_lbl)
-        top.addStretch()
+        self._view = QListView()
+        self._view.setModel(self._model)
+        self._view.setItemDelegate(self._delegate)
+        self._view.setSpacing(4)
+        self._view.setDragEnabled(True)
+        self._view.setAcceptDrops(True)
+        self._view.setDropIndicatorShown(True)
+        self._view.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self._view.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self._view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._view.setFrameShape(QFrame.Shape.NoFrame)
+        layout.addWidget(self._view)
 
-        pause_btn = QPushButton("⏸")
-        pause_btn.setObjectName("ghost")
-        pause_btn.setFixedSize(28, 28)
-        pause_btn.setToolTip("暂停")
-        pause_btn.clicked.connect(lambda: self.pause_requested.emit(key))
-        top.addWidget(pause_btn)
+    def set_dark(self, is_dark: bool):
+        self._delegate.set_dark(is_dark)
+        self._view.viewport().update()
 
-        cancel_btn = QPushButton("✕")
-        cancel_btn.setObjectName("ghost")
-        cancel_btn.setFixedSize(28, 28)
-        cancel_btn.setToolTip("取消")
-        cancel_btn.clicked.connect(lambda: self.cancel_requested.emit(key))
-        top.addWidget(cancel_btn)
+    def _find_row(self, key: int):
+        for row in range(self._model.rowCount()):
+            item = self._model.item(row)
+            d = item.data(Qt.ItemDataRole.UserRole)
+            if d and d.get("key") == key:
+                return row
+        return None
 
-        status_lbl = QLabel("0%")
-        status_lbl.setObjectName("section")
-        status_lbl.setFixedWidth(80)
-        status_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        top.addWidget(status_lbl)
-        vbox.addLayout(top)
+    def _update_item(self, row: int, updates: dict):
+        item = self._model.item(row)
+        d = dict(item.data(Qt.ItemDataRole.UserRole))
+        d.update(updates)
+        item.setData(d, Qt.ItemDataRole.UserRole)
+        idx = self._model.index(row, 0)
+        self._model.dataChanged.emit(idx, idx)
 
-        bar = QProgressBar()
-        bar.setValue(0)
-        bar.setTextVisible(False)
-        bar.setFixedHeight(5)
-        vbox.addWidget(bar)
+    def add_download(self, key: int, title: str):
+        item = QStandardItem()
+        item.setData({
+            "key": key,
+            "title": title,
+            "progress": 0,
+            "speed": "",
+            "state": "downloading",
+            "status_text": "准备中...",
+        }, Qt.ItemDataRole.UserRole)
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
+                      Qt.ItemFlag.ItemIsDragEnabled)
+        self._model.insertRow(0, item)
 
-        w._title_lbl = title_lbl
-        w._status_lbl = status_lbl
-        w._bar = bar
-        w._pause_btn = pause_btn
-        w._cancel_btn = cancel_btn
-        w._key = key
-        w._state = "downloading"  # downloading, paused, completed, error, cancelled
-        w._progress = 0
-        return w
-
-    def add_download(self, key, title):
-        item = QListWidgetItem()
-        row = self._make_row(key, title)
-        item.setSizeHint(row.sizeHint())
-        self.list_widget.insertItem(0, item)  # 最新在前
-        self.list_widget.setItemWidget(item, row)
-        self._items[key] = (item, row)
-
-    def update_progress(self, key, pct, speed):
-        if key not in self._items:
+    def update_progress(self, key: int, pct: int, speed: str):
+        row = self._find_row(key)
+        if row is None:
             return
-        _, row = self._items[key]
-        row._bar.setValue(pct)
-        row._status_lbl.setText(f"{pct}%  {speed}" if speed else f"{pct}%")
-        row._progress = pct
+        status = f"{pct}%  {speed}" if speed else f"{pct}%"
+        self._update_item(row, {"progress": pct, "speed": speed,
+                                "state": "downloading", "status_text": status})
 
-    def mark_done(self, key):
-        if key not in self._items:
+    def mark_done(self, key: int):
+        row = self._find_row(key)
+        if row is None:
             return
-        _, row = self._items[key]
-        row._bar.setValue(100)
-        row._bar.setStyleSheet(f"QProgressBar::chunk {{ background: {BILI_PINK}; border-radius: 2px; }}")
-        row._status_lbl.setText("完成")
-        row._status_lbl.setStyleSheet(f"color: {BILI_PINK}; font-weight: 600;")
-        row._pause_btn.setVisible(False)
-        row._cancel_btn.setVisible(False)
-        row._state = "completed"
-        row._progress = 100
+        self._update_item(row, {"progress": 100, "state": "completed", "status_text": "完成"})
 
-    def mark_error(self, key, msg):
-        if key not in self._items:
+    def mark_error(self, key: int, msg: str):
+        row = self._find_row(key)
+        if row is None:
             return
-        _, row = self._items[key]
-        row._bar.setStyleSheet("QProgressBar::chunk { background: #ef4444; border-radius: 2px; }")
-        row._status_lbl.setText(msg)
-        row._status_lbl.setStyleSheet("color: #ef4444;")
-        row._pause_btn.setVisible(False)
-        row._cancel_btn.setVisible(False)
-        row._state = "error" if msg != "已取消" else "cancelled"
-
-    def _sort_items(self):
-        mode = self.sort_combo.currentIndex()
-        items_data = []
-        for key, (item, row) in self._items.items():
-            items_data.append((key, item, row))
-
-        if mode == 0:  # 最新在前
-            items_data.sort(key=lambda x: x[0], reverse=True)
-        elif mode == 1:  # 最旧在前
-            items_data.sort(key=lambda x: x[0])
-        elif mode == 2:  # 进行中优先
-            def sort_key(x):
-                state = x[2]._state
-                if state == "downloading":
-                    return (0, -x[0])
-                elif state == "paused":
-                    return (1, -x[0])
-                elif state == "completed":
-                    return (2, -x[0])
-                else:
-                    return (3, -x[0])
-            items_data.sort(key=sort_key)
-
-        self.list_widget.clear()
-        for key, item, row in items_data:
-            new_item = QListWidgetItem()
-            new_item.setSizeHint(row.sizeHint())
-            self.list_widget.addItem(new_item)
-            self.list_widget.setItemWidget(new_item, row)
-            self._items[key] = (new_item, row)
+        state = "cancelled" if msg == "已取消" else "error"
+        self._update_item(row, {"state": state, "status_text": msg})
 
 
 class PersonalPage(QWidget):
@@ -853,6 +968,7 @@ class MainWindow(QMainWindow):
         qss = DARK_QSS if self.theme == "dark" else LIGHT_QSS
         self.setStyleSheet(qss)
         self.title_bar.theme_btn.setText("☀" if self.theme == "dark" else "🌙")
+        self.download_center.set_dark(self.theme == "dark")
 
     def _toggle_theme(self):
         self.theme = "light" if self.theme == "dark" else "dark"
@@ -987,18 +1103,14 @@ class MainWindow(QMainWindow):
             if hasattr(worker, '_paused'):
                 if worker._paused:
                     worker.resume()
-                    if key in self.download_center._items:
-                        _, row = self.download_center._items[key]
-                        row._pause_btn.setText("⏸")
-                        row._pause_btn.setToolTip("暂停")
-                        row._state = "downloading"
+                    row = self.download_center._find_row(key)
+                    if row is not None:
+                        self.download_center._update_item(row, {"state": "downloading"})
                 else:
                     worker.pause()
-                    if key in self.download_center._items:
-                        _, row = self.download_center._items[key]
-                        row._pause_btn.setText("▶")
-                        row._pause_btn.setToolTip("继续")
-                        row._state = "paused"
+                    row = self.download_center._find_row(key)
+                    if row is not None:
+                        self.download_center._update_item(row, {"state": "paused"})
 
     def _cancel_download_by_key(self, key):
         if key in self._dl_workers:

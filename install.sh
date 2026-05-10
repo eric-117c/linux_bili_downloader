@@ -15,11 +15,58 @@ for f in app.py settings.py settings_dialog.py requirements.txt; do
     fi
 done
 
-# 检查 ffmpeg
+# ── 检测发行版 ──────────────────────────────────────────────────────────────
+detect_distro() {
+    if command -v pacman &>/dev/null; then echo "arch"
+    elif command -v apt-get &>/dev/null; then echo "debian"
+    elif command -v dnf &>/dev/null; then echo "fedora"
+    elif command -v zypper &>/dev/null; then echo "suse"
+    else echo "unknown"
+    fi
+}
+
+install_pkg() {
+    local pkg_arch="$1" pkg_deb="$2" pkg_rpm="$3" pkg_suse="$4"
+    local distro; distro=$(detect_distro)
+    case "$distro" in
+        arch)   sudo pacman -S --noconfirm "$pkg_arch" ;;
+        debian) sudo apt-get install -y "$pkg_deb" ;;
+        fedora) sudo dnf install -y "$pkg_rpm" ;;
+        suse)   sudo zypper install -y "$pkg_suse" ;;
+        *)
+            echo "  无法自动安装，请手动安装后重试" >&2
+            return 1
+            ;;
+    esac
+}
+
+# ── Python 3 ────────────────────────────────────────────────────────────────
+if ! command -v python3 &>/dev/null; then
+    echo ">>> 未检测到 Python 3，尝试安装..."
+    install_pkg python python3 python3 python3
+else
+    pyver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    echo ">>> Python $pyver 已就绪"
+fi
+
+# ── python3-venv（Debian/Ubuntu 单独打包）────────────────────────────────────
+if ! python3 -c "import venv" &>/dev/null; then
+    echo ">>> 未检测到 python3-venv，尝试安装..."
+    distro=$(detect_distro)
+    if [ "$distro" = "debian" ]; then
+        sudo apt-get install -y python3-venv python3-full
+    fi
+fi
+
+# ── ffmpeg ──────────────────────────────────────────────────────────────────
 if ! command -v ffmpeg &>/dev/null; then
-    echo "警告: 未检测到 ffmpeg，视频合并功能将不可用" >&2
-    echo "  Arch: sudo pacman -S ffmpeg" >&2
-    echo "  Ubuntu/Debian: sudo apt install ffmpeg" >&2
+    echo ">>> 未检测到 ffmpeg，尝试安装..."
+    install_pkg ffmpeg ffmpeg ffmpeg ffmpeg
+    if ! command -v ffmpeg &>/dev/null; then
+        echo "警告: ffmpeg 安装失败，视频合并功能将不可用" >&2
+    fi
+else
+    echo ">>> ffmpeg 已就绪"
 fi
 
 # 复制应用文件

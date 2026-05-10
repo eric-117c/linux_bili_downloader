@@ -9,6 +9,10 @@
 - 合集支持勾选部分集数下载
 - 文件夹选择器，自定义保存路径
 - 实时显示下载进度和速度
+- 支持暂停 / 恢复 / 取消下载任务
+- 下载中心支持拖动排序任务顺序
+- 深色 / 亮色主题切换
+- 自定义背景壁纸
 - 支持读取浏览器 Cookie（用于高清画质或登录限制内容）
 
 ## 系统要求
@@ -17,22 +21,16 @@
 - Python 3.10+
 - ffmpeg（用于合并视频音频）
 
-```bash
-# Arch Linux
-sudo pacman -S python ffmpeg
-
-# Ubuntu/Debian
-sudo apt install python3 python3-venv ffmpeg
-```
-
 ## 安装
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Fem-boy_sc/videoCapture.git
 cd videoCapture
 chmod +x install.sh
 ./install.sh
 ```
+
+安装脚本会自动检测并安装缺失的依赖（Python 3、python3-venv、ffmpeg），支持 Arch / Debian / Ubuntu / Fedora / openSUSE。
 
 安装后通过命令行或应用菜单启动：
 
